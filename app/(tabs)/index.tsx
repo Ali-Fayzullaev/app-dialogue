@@ -1,98 +1,409 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { colors, getAvatarColor } from "@/constants/colors";
+import { useAuth } from "@/contexts/auth-context";
+import { supabase } from "@/lib/supabase";
+import { Chat, Message, Profile } from "@/types/database";
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useState } from "react";
+import {
+  FlatList,
+  Image,
+  RefreshControl,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+interface ChatItem extends Chat {
+  members: Profile[];
+  last_message: Message | null;
+}
 
-export default function HomeScreen() {
+export default function ChatsScreen() {
+  const [chats, setChats] = useState<ChatItem[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const { user } = useAuth();
+  const router = useRouter();
+
+  const fetchChats = async () => {
+    if (!user) return;
+
+    try {
+      const { data: chatMembers, error: memberError } = await supabase
+        .from("chat_members")
+        .select("chat_id")
+        .eq("user_id", user.id);
+
+      if (memberError) throw memberError;
+
+      if (!chatMembers || chatMembers.length === 0) {
+        setChats([]);
+        return;
+      }
+
+      const chatIds = chatMembers.map((cm) => cm.chat_id);
+
+      const { data: chatsData, error: chatsError } = await supabase
+        .from("chats")
+        .select("*")
+        .in("id", chatIds);
+
+      if (chatsError) throw chatsError;
+
+      const chatsWithDetails = await Promise.all(
+        (chatsData || []).map(async (chat) => {
+          const { data: members } = await supabase
+            .from("chat_members")
+            .select("user_id")
+            .eq("chat_id", chat.id);
+
+          const memberIds = members?.map((m) => m.user_id) || [];
+
+          const { data: profiles } = await supabase
+            .from("profiles")
+            .select("*")
+            .in("id", memberIds);
+
+          const { data: lastMessages } = await supabase
+            .from("messages")
+            .select("*")
+            .eq("chat_id", chat.id)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+          return {
+            ...chat,
+            members: profiles || [],
+            last_message: lastMessages?.[0] || null,
+          };
+        }),
+      );
+
+      chatsWithDetails.sort((a, b) => {
+        const timeA = a.last_message?.created_at || a.created_at;
+        const timeB = b.last_message?.created_at || b.created_at;
+        return new Date(timeB).getTime() - new Date(timeA).getTime();
+      });
+
+      setChats(chatsWithDetails);
+    } catch (error) {
+      console.error("Error fetching chats:", error);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchChats();
+    }, [user]),
+  );
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchChats();
+    setRefreshing(false);
+  };
+
+  const getChatName = (chat: ChatItem) => {
+    if (chat.name) return chat.name;
+    const otherMembers = chat.members.filter((m) => m.id !== user?.id);
+    return otherMembers.map((m) => m.username).join(", ") || "Чат";
+  };
+
+  const getOtherMember = (chat: ChatItem): Profile | undefined => {
+    return chat.members.find((m) => m.id !== user?.id);
+  };
+
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+    if (days === 0) {
+      return date.toLocaleTimeString("ru-RU", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } else if (days === 1) {
+      return "Вчера";
+    } else if (days < 7) {
+      return date.toLocaleDateString("ru-RU", { weekday: "short" });
+    } else {
+      return date.toLocaleDateString("ru-RU", {
+        day: "numeric",
+        month: "short",
+      });
+    }
+  };
+
+  const renderChat = ({ item }: { item: ChatItem }) => {
+    const otherMember = getOtherMember(item);
+    const avatarColor = otherMember
+      ? getAvatarColor(otherMember.id)
+      : colors.primary;
+
+    const handlePress = () => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      router.push(`/chat/${item.id}` as any);
+    };
+
+    return (
+      <TouchableOpacity
+        style={styles.chatItem}
+        onPress={handlePress}
+        activeOpacity={0.7}
+      >
+        {otherMember?.avatar_url ? (
+          <Image
+            source={{ uri: otherMember.avatar_url }}
+            style={styles.avatarImage}
+          />
+        ) : (
+          <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+            <Text style={styles.avatarText}>
+              {getChatName(item).charAt(0).toUpperCase()}
+            </Text>
+          </View>
+        )}
+        <View style={styles.chatInfo}>
+          <View style={styles.chatHeader}>
+            <Text style={styles.chatName} numberOfLines={1}>
+              {getChatName(item)}
+            </Text>
+            {item.last_message && (
+              <Text style={styles.chatTime}>
+                {formatTime(item.last_message.created_at)}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.lastMessage} numberOfLines={1}>
+            {item.last_message?.content || "Нет сообщений"}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" />
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Чаты</Text>
+        <TouchableOpacity
+          style={styles.newChatButton}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push("/new-chat");
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="create-outline" size={22} color={colors.primary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Search Bar (visual) */}
+      <View style={styles.searchContainer}>
+        <View style={styles.searchBar}>
+          <Ionicons
+            name="search"
+            size={18}
+            color={colors.textMuted}
+            style={{ marginRight: 8 }}
+          />
+          <Text style={styles.searchPlaceholder}>Поиск</Text>
+        </View>
+      </View>
+
+      {/* Chat List */}
+      {chats.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <View style={styles.emptyIcon}>
+            <Ionicons
+              name="chatbubbles-outline"
+              size={48}
+              color={colors.primary}
+            />
+          </View>
+          <Text style={styles.emptyTitle}>Нет чатов</Text>
+          <Text style={styles.emptyText}>
+            Начните общение, нажав на кнопку выше
+          </Text>
+          <TouchableOpacity
+            style={styles.startChatButton}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              router.push("/new-chat");
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.startChatButtonText}>Новый чат</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={chats}
+          renderItem={renderChat}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContainer}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+            />
+          }
+          showsVerticalScrollIndicator={false}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
   },
-  stepContainer: {
-    gap: 8,
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 16,
+    backgroundColor: colors.background,
+  },
+  headerTitle: {
+    fontSize: 34,
+    fontWeight: "bold",
+    color: colors.textPrimary,
+  },
+  newChatButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primaryLight,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  searchContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+  },
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.inputBackground,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  searchPlaceholder: {
+    fontSize: 16,
+    color: colors.textMuted,
+  },
+  listContainer: {
+    paddingBottom: 20,
+  },
+  chatItem: {
+    flexDirection: "row",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+  avatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  avatarImage: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    marginRight: 14,
+    backgroundColor: colors.border,
+  },
+  avatarText: {
+    color: colors.textLight,
+    fontSize: 22,
+    fontWeight: "600",
+  },
+  chatInfo: {
+    flex: 1,
+    justifyContent: "center",
+    borderBottomWidth: 0.5,
+    borderBottomColor: colors.borderLight,
+    paddingBottom: 14,
+  },
+  chatHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  chatName: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: colors.textPrimary,
+    flex: 1,
+    marginRight: 8,
+  },
+  chatTime: {
+    fontSize: 14,
+    color: colors.textMuted,
+  },
+  lastMessage: {
+    fontSize: 15,
+    color: colors.textSecondary,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 40,
+  },
+  emptyIcon: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: colors.primaryLight,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 24,
+  },
+  emptyTitle: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: colors.textPrimary,
     marginBottom: 8,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  emptyText: {
+    fontSize: 16,
+    color: colors.textSecondary,
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  startChatButton: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 32,
+    paddingVertical: 14,
+    borderRadius: 25,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  startChatButtonText: {
+    color: colors.textLight,
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

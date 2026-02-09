@@ -1,0 +1,1947 @@
+import { colors, getAvatarColor } from "@/constants/colors";
+import { useAuth } from "@/contexts/auth-context";
+import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
+import { supabase } from "@/lib/supabase";
+import { Message, Profile } from "@/types/database";
+import { Ionicons } from "@expo/vector-icons";
+import { RealtimeChannel } from "@supabase/supabase-js";
+import { Audio, ResizeMode, Video } from "expo-av";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import React, { useEffect, useRef, useState } from "react";
+import {
+    ActionSheetIOS,
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Dimensions,
+    FlatList,
+    Image,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from "react-native";
+
+interface MessageWithSender extends Message {
+  sender: Profile | null;
+}
+
+// Безопасная вибрация (не работает на веб)
+const safeHaptic = (
+  style: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light,
+) => {
+  if (Platform.OS !== "web") {
+    Haptics.impactAsync(style);
+  }
+};
+
+const safeNotificationHaptic = (
+  type: Haptics.NotificationFeedbackType = Haptics.NotificationFeedbackType
+    .Success,
+) => {
+  if (Platform.OS !== "web") {
+    Haptics.notificationAsync(type);
+  }
+};
+
+export default function ChatScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const [messages, setMessages] = useState<MessageWithSender[]>([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [chatName, setChatName] = useState("Чат");
+  const [otherUser, setOtherUser] = useState<Profile | null>(null);
+  const { user } = useAuth();
+  const flatListRef = useRef<FlatList>(null);
+  const router = useRouter();
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const [editingMessage, setEditingMessage] =
+    useState<MessageWithSender | null>(null);
+  const [selectedMessage, setSelectedMessage] =
+    useState<MessageWithSender | null>(null);
+  const [showMessageMenu, setShowMessageMenu] = useState(false);
+  const menuAnimation = useRef(new Animated.Value(0)).current;
+  const recordButtonScale = useRef(new Animated.Value(1)).current;
+  const [showMediaPicker, setShowMediaPicker] = useState(false);
+  const mediaPickerAnimation = useRef(new Animated.Value(0)).current;
+  const [fullscreenMedia, setFullscreenMedia] = useState<{
+    url: string;
+    type: "image" | "video";
+  } | null>(null);
+
+  useEffect(() => {
+    fetchChatInfo();
+    fetchMessages();
+    subscribeToMessages();
+
+    return () => {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+      }
+      if (soundRef.current) {
+        soundRef.current.unloadAsync();
+      }
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+    };
+  }, [id]);
+
+  const fetchChatInfo = async () => {
+    if (!id || !user) return;
+
+    try {
+      const { data: chat } = await supabase
+        .from("chats")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (chat?.name) {
+        setChatName(chat.name);
+        return;
+      }
+
+      const { data: members } = await supabase
+        .from("chat_members")
+        .select("user_id")
+        .eq("chat_id", id);
+
+      const otherMemberIds =
+        members?.filter((m) => m.user_id !== user.id).map((m) => m.user_id) ||
+        [];
+
+      if (otherMemberIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("*")
+          .in("id", otherMemberIds);
+
+        if (profiles && profiles.length > 0) {
+          setOtherUser(profiles[0]);
+          const name = profiles.map((p) => p.username).join(", ");
+          setChatName(name);
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching chat info:", error);
+    }
+  };
+
+  const fetchMessages = async () => {
+    if (!id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("chat_id", id)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+
+      const senderIds = [...new Set(data?.map((m) => m.sender_id) || [])];
+
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("*")
+        .in("id", senderIds);
+
+      const profileMap = new Map(profiles?.map((p) => [p.id, p]));
+
+      const messagesWithSenders: MessageWithSender[] = (data || []).map(
+        (m) => ({
+          ...m,
+          sender: profileMap.get(m.sender_id) || null,
+        }),
+      );
+
+      setMessages(messagesWithSenders);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const subscribeToMessages = () => {
+    if (!id) return;
+
+    channelRef.current = supabase
+      .channel(`chat:${id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `chat_id=eq.${id}`,
+        },
+        async (payload) => {
+          const newMsg = payload.new as Message;
+
+          const { data: senderProfile } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", newMsg.sender_id)
+            .single();
+
+          const messageWithSender: MessageWithSender = {
+            ...newMsg,
+            sender: senderProfile,
+          };
+
+          setMessages((prev) => [...prev, messageWithSender]);
+
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        },
+      )
+      .subscribe();
+  };
+
+  const sendMessage = async () => {
+    if (!newMessage.trim() || !user || !id || sending) return;
+
+    safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    setSending(true);
+    const messageText = newMessage.trim();
+    setNewMessage("");
+
+    try {
+      if (editingMessage) {
+        // Редактирование существующего сообщения
+        const { error } = await supabase
+          .from("messages")
+          .update({ content: messageText })
+          .eq("id", editingMessage.id);
+
+        if (error) throw error;
+
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === editingMessage.id
+              ? { ...msg, content: messageText }
+              : msg,
+          ),
+        );
+        setEditingMessage(null);
+      } else {
+        // Отправка нового сообщения
+        const { error } = await supabase.from("messages").insert({
+          chat_id: id,
+          sender_id: user.id,
+          content: messageText,
+        });
+
+        if (error) throw error;
+      }
+    } catch (error) {
+      console.error("Error sending message:", error);
+      setNewMessage(messageText);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleMessageLongPress = (message: MessageWithSender) => {
+    // Показываем меню для любого сообщения (копировать), но редактировать/удалить только для своих
+    safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    setSelectedMessage(message);
+    setShowMessageMenu(true);
+
+    Animated.spring(menuAnimation, {
+      toValue: 1,
+      useNativeDriver: true,
+      tension: 100,
+      friction: 8,
+    }).start();
+  };
+
+  const closeMessageMenu = () => {
+    Animated.timing(menuAnimation, {
+      toValue: 0,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowMessageMenu(false);
+      setSelectedMessage(null);
+    });
+  };
+
+  const handleMenuAction = (action: "copy" | "edit" | "delete" | "reply") => {
+    closeMessageMenu();
+
+    setTimeout(() => {
+      if (!selectedMessage) return;
+
+      switch (action) {
+        case "edit":
+          if (
+            selectedMessage.content &&
+            selectedMessage.sender_id === user?.id
+          ) {
+            startEditingMessage(selectedMessage);
+          }
+          break;
+        case "delete":
+          if (selectedMessage.sender_id === user?.id) {
+            confirmDeleteMessage(selectedMessage);
+          }
+          break;
+        case "copy":
+          // Копирование текста в буфер обмена
+          if (selectedMessage.content) {
+            Clipboard.setStringAsync(selectedMessage.content);
+            safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+          }
+          break;
+      }
+    }, 200);
+  };
+
+  const startEditingMessage = (message: MessageWithSender) => {
+    setEditingMessage(message);
+    setNewMessage(message.content);
+  };
+
+  const cancelEditing = () => {
+    setEditingMessage(null);
+    setNewMessage("");
+  };
+
+  const confirmDeleteMessage = (message: MessageWithSender) => {
+    Alert.alert("Удалить сообщение?", "Это действие нельзя отменить", [
+      { text: "Отмена", style: "cancel" },
+      {
+        text: "Удалить",
+        style: "destructive",
+        onPress: () => deleteMessage(message.id),
+      },
+    ]);
+  };
+
+  const deleteMessage = async (messageId: string) => {
+    try {
+      const { error } = await supabase
+        .from("messages")
+        .delete()
+        .eq("id", messageId);
+
+      if (error) throw error;
+
+      setMessages((prev) => prev.filter((msg) => msg.id !== messageId));
+      safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error("Error deleting message:", error);
+      Alert.alert("Ошибка", "Не удалось удалить сообщение");
+    }
+  };
+
+  const handleAttachPress = () => {
+    safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: [
+            "Отмена",
+            "Фото из галереи",
+            "Сделать фото",
+            "Записать аудио",
+          ],
+          cancelButtonIndex: 0,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 1) handlePickMedia();
+          if (buttonIndex === 2) handleTakePhoto();
+          if (buttonIndex === 3) handleRecordAudio();
+        },
+      );
+    } else {
+      setShowAttachMenu(!showAttachMenu);
+    }
+  };
+
+  const handlePickMedia = async () => {
+    setShowAttachMenu(false);
+    if (Platform.OS === "web") {
+      Alert.alert("Недоступно", "Выбор медиа недоступен в веб-версии");
+      return;
+    }
+    const result = await pickImageOrVideo();
+    if (result && !result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      await sendMediaMessage(asset.uri, asset.mimeType || "image/jpeg");
+    }
+  };
+
+  const handleTakePhoto = async () => {
+    setShowAttachMenu(false);
+    if (Platform.OS === "web") {
+      Alert.alert("Недоступно", "Камера недоступна в веб-версии");
+      return;
+    }
+    const result = await takePhoto();
+    if (result && !result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      await sendMediaMessage(asset.uri, asset.mimeType || "image/jpeg");
+    }
+  };
+
+  const handleRecordAudio = async () => {
+    setShowAttachMenu(false);
+
+    if (isRecording) {
+      // Остановить запись
+      await stopRecording();
+    } else {
+      // Начать запись
+      await startRecording();
+    }
+  };
+
+  const startRecording = async () => {
+    if (Platform.OS === "web") {
+      Alert.alert("Недоступно", "Запись аудио недоступна в веб-версии");
+      return;
+    }
+
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("Нет доступа", "Разрешите доступ к микрофону");
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+      );
+
+      recordingRef.current = recording;
+      setIsRecording(true);
+      setRecordingDuration(0);
+
+      // Таймер для отображения длительности
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+
+      safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (error) {
+      console.error("Start recording error:", error);
+      Alert.alert("Ошибка", "Не удалось начать запись");
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      if (!recordingRef.current) return;
+
+      // Остановить таймер
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+
+      setIsRecording(false);
+      setRecordingDuration(0);
+
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+      });
+
+      if (uri) {
+        safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+        await sendMediaMessage(uri, "audio/m4a");
+      }
+    } catch (error) {
+      console.error("Stop recording error:", error);
+      Alert.alert("Ошибка", "Не удалось сохранить запись");
+    }
+  };
+
+  // Hold-to-record handlers
+  const onMicPressIn = async () => {
+    if (Platform.OS === "web") return;
+
+    Animated.spring(recordButtonScale, {
+      toValue: 1.5,
+      useNativeDriver: true,
+    }).start();
+
+    await startRecording();
+  };
+
+  const onMicPressOut = async () => {
+    Animated.spring(recordButtonScale, {
+      toValue: 1,
+      useNativeDriver: true,
+    }).start();
+
+    if (isRecording && recordingDuration >= 1) {
+      await stopRecording();
+    } else if (isRecording) {
+      await cancelRecording();
+      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    }
+  };
+
+  // Media picker modal
+  const openMediaPicker = () => {
+    setShowMediaPicker(true);
+    Animated.spring(mediaPickerAnimation, {
+      toValue: 1,
+      useNativeDriver: true,
+      tension: 100,
+      friction: 8,
+    }).start();
+  };
+
+  const closeMediaPicker = () => {
+    Animated.timing(mediaPickerAnimation, {
+      toValue: 0,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowMediaPicker(false);
+    });
+  };
+
+  const cancelRecording = async () => {
+    try {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+
+      if (recordingRef.current) {
+        await recordingRef.current.stopAndUnloadAsync();
+        recordingRef.current = null;
+      }
+
+      setIsRecording(false);
+      setRecordingDuration(0);
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+      });
+    } catch (error) {
+      console.error("Cancel recording error:", error);
+    }
+  };
+
+  const playAudio = async (messageId: string, audioUrl: string) => {
+    // На веб используем HTML5 Audio
+    if (Platform.OS === "web") {
+      try {
+        const audio = new window.Audio(audioUrl);
+        audio.play();
+        setPlayingAudioId(messageId);
+        audio.onended = () => setPlayingAudioId(null);
+      } catch (error) {
+        console.error("Web audio error:", error);
+      }
+      return;
+    }
+
+    try {
+      // Если уже играет это аудио - остановить
+      if (playingAudioId === messageId && soundRef.current) {
+        await soundRef.current.stopAsync();
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+        setPlayingAudioId(null);
+        return;
+      }
+
+      // Остановить предыдущее аудио
+      if (soundRef.current) {
+        await soundRef.current.stopAsync();
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+      });
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: audioUrl },
+        { shouldPlay: true },
+        (status) => {
+          if ("didJustFinish" in status && status.didJustFinish) {
+            setPlayingAudioId(null);
+            soundRef.current?.unloadAsync();
+            soundRef.current = null;
+          }
+        },
+      );
+
+      soundRef.current = sound;
+      setPlayingAudioId(messageId);
+      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      console.error("Play audio error:", error);
+      Alert.alert("Ошибка", "Не удалось воспроизвести аудио");
+    }
+  };
+
+  const sendMediaMessage = async (uri: string, mimeType: string) => {
+    if (!user || !id || uploading) return;
+
+    setUploading(true);
+    safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
+
+    try {
+      const result = await uploadMedia(uri, user.id, mimeType);
+
+      if (!result.success) {
+        Alert.alert("Ошибка", result.error || "Не удалось загрузить файл");
+        return;
+      }
+
+      const { error } = await supabase.from("messages").insert({
+        chat_id: id,
+        sender_id: user.id,
+        content: "",
+        media_url: result.url,
+        media_type: result.type,
+      });
+
+      if (error) throw error;
+    } catch (error) {
+      console.error("Error sending media:", error);
+      Alert.alert("Ошибка", "Не удалось отправить сообщение");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const formatMessageTime = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString("ru-RU", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  const formatDateSeparator = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+    if (days === 0) return "Сегодня";
+    if (days === 1) return "Вчера";
+    return date.toLocaleDateString("ru-RU", {
+      day: "numeric",
+      month: "long",
+      year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+    });
+  };
+
+  const shouldShowDateSeparator = (index: number) => {
+    if (index === 0) return true;
+    const currentDate = new Date(messages[index].created_at).toDateString();
+    const prevDate = new Date(messages[index - 1].created_at).toDateString();
+    return currentDate !== prevDate;
+  };
+
+  const renderMessage = ({
+    item,
+    index,
+  }: {
+    item: MessageWithSender;
+    index: number;
+  }) => {
+    const isMyMessage = item.sender_id === user?.id;
+    const showDate = shouldShowDateSeparator(index);
+
+    return (
+      <>
+        {showDate && (
+          <View style={styles.dateSeparator}>
+            <Text style={styles.dateSeparatorText}>
+              {formatDateSeparator(item.created_at)}
+            </Text>
+          </View>
+        )}
+        <TouchableOpacity
+          style={[
+            styles.messageContainer,
+            isMyMessage
+              ? styles.myMessageContainer
+              : styles.otherMessageContainer,
+          ]}
+          onLongPress={() => handleMessageLongPress(item)}
+          activeOpacity={0.8}
+          delayLongPress={300}
+        >
+          <View
+            style={[
+              styles.messageBubble,
+              isMyMessage ? styles.myMessageBubble : styles.otherMessageBubble,
+              item.media_url && styles.mediaBubble,
+            ]}
+          >
+            {/* Media content */}
+            {item.media_url && item.media_type === "image" && (
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() =>
+                  setFullscreenMedia({ url: item.media_url!, type: "image" })
+                }
+              >
+                <Image
+                  source={{ uri: item.media_url }}
+                  style={styles.mediaImage}
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
+            )}
+            {item.media_url &&
+              item.media_type === "video" &&
+              Platform.OS !== "web" && (
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={() =>
+                    setFullscreenMedia({ url: item.media_url!, type: "video" })
+                  }
+                >
+                  <Video
+                    source={{ uri: item.media_url }}
+                    style={styles.mediaVideo}
+                    useNativeControls
+                    resizeMode={ResizeMode.CONTAIN}
+                    isLooping={false}
+                  />
+                </TouchableOpacity>
+              )}
+            {item.media_url &&
+              item.media_type === "video" &&
+              Platform.OS === "web" && (
+                <View style={styles.mediaVideo}>
+                  <Text style={{ color: colors.textMuted }}>
+                    Видео (откройте в приложении)
+                  </Text>
+                </View>
+              )}
+            {item.media_url && item.media_type === "audio" && (
+              <TouchableOpacity
+                style={[
+                  styles.audioContainer,
+                  isMyMessage
+                    ? styles.myAudioContainer
+                    : styles.otherAudioContainer,
+                ]}
+                onPress={() => playAudio(item.id, item.media_url!)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.audioPlayButton}>
+                  <Ionicons
+                    name={playingAudioId === item.id ? "pause" : "play"}
+                    size={20}
+                    color={colors.textLight}
+                  />
+                </View>
+                <View style={styles.audioWaveform}>
+                  {[...Array(20)].map((_, i) => (
+                    <View
+                      key={i}
+                      style={[
+                        styles.audioWaveBar,
+                        { height: 4 + Math.random() * 16 },
+                        isMyMessage
+                          ? styles.myAudioWaveBar
+                          : styles.otherAudioWaveBar,
+                        playingAudioId === item.id && styles.audioWaveBarActive,
+                      ]}
+                    />
+                  ))}
+                </View>
+                <Text
+                  style={[
+                    styles.audioDuration,
+                    isMyMessage
+                      ? styles.myAudioDuration
+                      : styles.otherAudioDuration,
+                  ]}
+                >
+                  0:30
+                </Text>
+              </TouchableOpacity>
+            )}
+            {/* Text content */}
+            {item.content ? (
+              <Text
+                style={[
+                  styles.messageText,
+                  isMyMessage ? styles.myMessageText : styles.otherMessageText,
+                ]}
+              >
+                {item.content}
+              </Text>
+            ) : null}
+            <Text
+              style={[
+                styles.messageTime,
+                isMyMessage ? styles.myMessageTime : styles.otherMessageTime,
+              ]}
+            >
+              {formatMessageTime(item.created_at)}
+              {isMyMessage && (
+                <Ionicons
+                  name="checkmark-done"
+                  size={14}
+                  color={colors.messageTime}
+                  style={{ marginLeft: 4 }}
+                />
+              )}
+            </Text>
+            {item.updated_at && item.updated_at !== item.created_at && (
+              <Text style={styles.editedLabel}>изменено</Text>
+            )}
+          </View>
+        </TouchableOpacity>
+      </>
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  const avatarColor = otherUser ? getAvatarColor(otherUser.id) : colors.primary;
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+    >
+      {/* Custom Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => {
+            safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+            router.back();
+          }}
+        >
+          <Ionicons name="arrow-back" size={24} color={colors.textLight} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.headerProfile}
+          onPress={() => {
+            if (otherUser?.id) {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              router.push(`/profile/${otherUser.id}` as any);
+            }
+          }}
+          activeOpacity={0.7}
+        >
+          {otherUser?.avatar_url ? (
+            <Image
+              source={{ uri: otherUser.avatar_url }}
+              style={styles.headerAvatarImage}
+            />
+          ) : (
+            <View
+              style={[styles.headerAvatar, { backgroundColor: avatarColor }]}
+            >
+              <Text style={styles.headerAvatarText}>
+                {chatName.charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.headerInfo}>
+            <Text style={styles.headerName}>{chatName}</Text>
+            <Text style={styles.headerStatus}>был(а) недавно</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Messages */}
+      <View style={styles.messagesContainer}>
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderMessage}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.messagesList}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <View style={styles.emptyIcon}>
+                <Ionicons
+                  name="chatbubble-ellipses-outline"
+                  size={36}
+                  color={colors.primary}
+                />
+              </View>
+              <Text style={styles.emptyText}>Начните диалог!</Text>
+              <Text style={styles.emptySubtext}>
+                Отправьте первое сообщение
+              </Text>
+            </View>
+          }
+        />
+      </View>
+
+      {/* Android Attach Menu */}
+      {showAttachMenu && Platform.OS === "android" && (
+        <View style={styles.attachMenu}>
+          <TouchableOpacity
+            style={styles.attachMenuItem}
+            onPress={handlePickMedia}
+          >
+            <View
+              style={[styles.attachMenuIcon, { backgroundColor: "#4CAF50" }]}
+            >
+              <Ionicons name="image" size={22} color={colors.textLight} />
+            </View>
+            <Text style={styles.attachMenuText}>Галерея</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.attachMenuItem}
+            onPress={handleTakePhoto}
+          >
+            <View
+              style={[styles.attachMenuIcon, { backgroundColor: "#2196F3" }]}
+            >
+              <Ionicons name="camera" size={22} color={colors.textLight} />
+            </View>
+            <Text style={styles.attachMenuText}>Камера</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.attachMenuItem}
+            onPress={handleRecordAudio}
+          >
+            <View
+              style={[styles.attachMenuIcon, { backgroundColor: "#FF9800" }]}
+            >
+              <Ionicons name="mic" size={22} color={colors.textLight} />
+            </View>
+            <Text style={styles.attachMenuText}>Аудио</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Editing indicator */}
+      {editingMessage && (
+        <View style={styles.editingContainer}>
+          <View style={styles.editingInfo}>
+            <Ionicons name="pencil" size={18} color={colors.primary} />
+            <Text style={styles.editingLabel}>Редактирование</Text>
+            <Text style={styles.editingText} numberOfLines={1}>
+              {editingMessage.content}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={cancelEditing}
+            style={styles.editingCancel}
+          >
+            <Ionicons name="close" size={20} color={colors.textMuted} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Input */}
+      <View style={styles.inputContainer}>
+        {isRecording ? (
+          /* Recording UI - Professional design */
+          <View style={styles.recordingWrapper}>
+            <TouchableOpacity
+              style={styles.cancelRecordingButton}
+              onPress={cancelRecording}
+            >
+              <Ionicons name="trash-outline" size={22} color={colors.error} />
+            </TouchableOpacity>
+
+            <View style={styles.recordingIndicator}>
+              <Animated.View
+                style={[
+                  styles.recordingDot,
+                  { transform: [{ scale: recordButtonScale }] },
+                ]}
+              />
+              <Text style={styles.recordingText}>
+                {Math.floor(recordingDuration / 60)}:
+                {(recordingDuration % 60).toString().padStart(2, "0")}
+              </Text>
+            </View>
+
+            {/* Send Recording Button */}
+            <TouchableOpacity
+              style={styles.sendRecordingButton}
+              onPress={stopRecording}
+            >
+              <Ionicons name="send" size={20} color={colors.textLight} />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          /* Normal Input UI */
+          <>
+            {/* Plus/Attach Button */}
+            <TouchableOpacity
+              style={styles.attachButton}
+              onPress={openMediaPicker}
+              disabled={uploading}
+            >
+              {uploading ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Ionicons name="add" size={26} color={colors.primary} />
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.inputWrapper}>
+              <TextInput
+                style={styles.input}
+                value={newMessage}
+                onChangeText={setNewMessage}
+                placeholder="Сообщение..."
+                placeholderTextColor={colors.textMuted}
+                multiline
+                maxLength={1000}
+              />
+            </View>
+
+            {/* Send or Mic Button */}
+            {newMessage.trim() || editingMessage ? (
+              <TouchableOpacity
+                style={[
+                  styles.sendButton,
+                  editingMessage && styles.editSendButton,
+                ]}
+                onPress={sendMessage}
+                disabled={sending}
+                activeOpacity={0.7}
+              >
+                {sending ? (
+                  <ActivityIndicator size="small" color={colors.textLight} />
+                ) : (
+                  <Ionicons
+                    name={editingMessage ? "checkmark" : "send"}
+                    size={20}
+                    color={colors.textLight}
+                  />
+                )}
+              </TouchableOpacity>
+            ) : (
+              <Pressable
+                onPressIn={onMicPressIn}
+                onPressOut={onMicPressOut}
+                style={styles.micButton}
+              >
+                <Animated.View
+                  style={{ transform: [{ scale: recordButtonScale }] }}
+                >
+                  <Ionicons name="mic" size={24} color={colors.textLight} />
+                </Animated.View>
+              </Pressable>
+            )}
+          </>
+        )}
+      </View>
+
+      {/* Media Picker Modal */}
+      <Modal
+        visible={showMediaPicker}
+        transparent
+        animationType="none"
+        onRequestClose={closeMediaPicker}
+      >
+        <Pressable style={styles.mediaPickerOverlay} onPress={closeMediaPicker}>
+          <Animated.View
+            style={[
+              styles.mediaPickerContainer,
+              {
+                transform: [
+                  {
+                    translateY: mediaPickerAnimation.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [300, 0],
+                    }),
+                  },
+                ],
+                opacity: mediaPickerAnimation,
+              },
+            ]}
+          >
+            <View style={styles.mediaPickerHandle} />
+            <Text style={styles.mediaPickerTitle}>Отправить</Text>
+
+            <View style={styles.mediaPickerGrid}>
+              <TouchableOpacity
+                style={styles.mediaPickerItem}
+                onPress={() => {
+                  closeMediaPicker();
+                  setTimeout(handlePickMedia, 200);
+                }}
+              >
+                <View
+                  style={[
+                    styles.mediaPickerIcon,
+                    { backgroundColor: "#7C4DFF" },
+                  ]}
+                >
+                  <Ionicons name="image" size={28} color="#fff" />
+                </View>
+                <Text style={styles.mediaPickerLabel}>Галерея</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.mediaPickerItem}
+                onPress={() => {
+                  closeMediaPicker();
+                  setTimeout(handleTakePhoto, 200);
+                }}
+              >
+                <View
+                  style={[
+                    styles.mediaPickerIcon,
+                    { backgroundColor: "#FF5722" },
+                  ]}
+                >
+                  <Ionicons name="camera" size={28} color="#fff" />
+                </View>
+                <Text style={styles.mediaPickerLabel}>Камера</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.mediaPickerItem}
+                onPress={() => {
+                  closeMediaPicker();
+                  // Для аудио используем hold на кнопке микрофона
+                  Alert.alert(
+                    "Аудио",
+                    "Удерживайте кнопку микрофона для записи голосового сообщения",
+                  );
+                }}
+              >
+                <View
+                  style={[
+                    styles.mediaPickerIcon,
+                    { backgroundColor: "#FF9800" },
+                  ]}
+                >
+                  <Ionicons name="mic" size={28} color="#fff" />
+                </View>
+                <Text style={styles.mediaPickerLabel}>Аудио</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.mediaPickerItem}
+                onPress={() => {
+                  closeMediaPicker();
+                  // Можно добавить выбор документов позже
+                  Alert.alert("Скоро", "Отправка документов будет добавлена");
+                }}
+              >
+                <View
+                  style={[
+                    styles.mediaPickerIcon,
+                    { backgroundColor: "#2196F3" },
+                  ]}
+                >
+                  <Ionicons name="document" size={28} color="#fff" />
+                </View>
+                <Text style={styles.mediaPickerLabel}>Документ</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.mediaPickerCancel}
+              onPress={closeMediaPicker}
+            >
+              <Text style={styles.mediaPickerCancelText}>Отмена</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </Pressable>
+      </Modal>
+
+      {/* Message Context Menu Modal */}
+      <Modal
+        visible={showMessageMenu}
+        transparent
+        animationType="none"
+        onRequestClose={closeMessageMenu}
+      >
+        <Pressable style={styles.menuOverlay} onPress={closeMessageMenu}>
+          <Animated.View
+            style={[
+              styles.menuContainer,
+              {
+                transform: [
+                  {
+                    translateY: menuAnimation.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [300, 0],
+                    }),
+                  },
+                ],
+                opacity: menuAnimation,
+              },
+            ]}
+          >
+            <View style={styles.menuHandle} />
+
+            {selectedMessage && (
+              <>
+                {/* Message Preview */}
+                <View style={styles.menuPreview}>
+                  <Text style={styles.menuPreviewText} numberOfLines={2}>
+                    {selectedMessage.content ||
+                      (selectedMessage.media_type === "image"
+                        ? "Фото"
+                        : selectedMessage.media_type === "video"
+                          ? "Видео"
+                          : "Аудио")}
+                  </Text>
+                </View>
+
+                {/* Menu Actions */}
+                <View style={styles.menuActions}>
+                  {selectedMessage.content && (
+                    <TouchableOpacity
+                      style={styles.menuActionItem}
+                      onPress={() => handleMenuAction("copy")}
+                      activeOpacity={0.7}
+                    >
+                      <View
+                        style={[
+                          styles.menuActionIcon,
+                          { backgroundColor: "#6C7BFF" },
+                        ]}
+                      >
+                        <Ionicons name="copy-outline" size={22} color="#fff" />
+                      </View>
+                      <Text style={styles.menuActionText}>Копировать</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {selectedMessage.sender_id === user?.id &&
+                    selectedMessage.content && (
+                      <TouchableOpacity
+                        style={styles.menuActionItem}
+                        onPress={() => handleMenuAction("edit")}
+                        activeOpacity={0.7}
+                      >
+                        <View
+                          style={[
+                            styles.menuActionIcon,
+                            { backgroundColor: "#4CAF50" },
+                          ]}
+                        >
+                          <Ionicons
+                            name="pencil-outline"
+                            size={22}
+                            color="#fff"
+                          />
+                        </View>
+                        <Text style={styles.menuActionText}>Редактировать</Text>
+                      </TouchableOpacity>
+                    )}
+
+                  {selectedMessage.sender_id === user?.id && (
+                    <TouchableOpacity
+                      style={styles.menuActionItem}
+                      onPress={() => handleMenuAction("delete")}
+                      activeOpacity={0.7}
+                    >
+                      <View
+                        style={[
+                          styles.menuActionIcon,
+                          { backgroundColor: colors.error },
+                        ]}
+                      >
+                        <Ionicons name="trash-outline" size={22} color="#fff" />
+                      </View>
+                      <Text
+                        style={[styles.menuActionText, { color: colors.error }]}
+                      >
+                        Удалить
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* Cancel Button */}
+                <TouchableOpacity
+                  style={styles.menuCancelButton}
+                  onPress={closeMessageMenu}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.menuCancelText}>Отмена</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </Animated.View>
+        </Pressable>
+      </Modal>
+
+      {/* Fullscreen Media Viewer */}
+      <Modal
+        visible={!!fullscreenMedia}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFullscreenMedia(null)}
+      >
+        <View style={styles.fullscreenOverlay}>
+          <TouchableOpacity
+            style={styles.fullscreenCloseButton}
+            onPress={() => setFullscreenMedia(null)}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+
+          {fullscreenMedia?.type === "image" && (
+            <Image
+              source={{ uri: fullscreenMedia.url }}
+              style={styles.fullscreenImage}
+              resizeMode="contain"
+            />
+          )}
+
+          {fullscreenMedia?.type === "video" && Platform.OS !== "web" && (
+            <Video
+              source={{ uri: fullscreenMedia.url }}
+              style={styles.fullscreenVideo}
+              useNativeControls
+              resizeMode={ResizeMode.CONTAIN}
+              shouldPlay
+            />
+          )}
+        </View>
+      </Modal>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#e5ddd5",
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: colors.background,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: 50,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    backgroundColor: colors.primary,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 8,
+  },
+  headerProfile: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  headerAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  headerAvatarImage: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    marginRight: 12,
+  },
+  headerAvatarText: {
+    color: colors.textLight,
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  headerInfo: {
+    flex: 1,
+  },
+  headerName: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: colors.textLight,
+  },
+  headerStatus: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.8)",
+    marginTop: 2,
+  },
+  messagesContainer: {
+    flex: 1,
+  },
+  messagesList: {
+    padding: 16,
+    flexGrow: 1,
+  },
+  dateSeparator: {
+    alignItems: "center",
+    marginVertical: 16,
+  },
+  dateSeparatorText: {
+    backgroundColor: "rgba(0,0,0,0.1)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  messageContainer: {
+    marginBottom: 4,
+  },
+  myMessageContainer: {
+    alignItems: "flex-end",
+  },
+  otherMessageContainer: {
+    alignItems: "flex-start",
+  },
+  messageBubble: {
+    maxWidth: "75%",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+  },
+  myMessageBubble: {
+    backgroundColor: colors.messageMine,
+    borderBottomRightRadius: 4,
+  },
+  otherMessageBubble: {
+    backgroundColor: colors.messageOther,
+    borderBottomLeftRadius: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  messageText: {
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  myMessageText: {
+    color: colors.textPrimary,
+  },
+  otherMessageText: {
+    color: colors.textPrimary,
+  },
+  messageTime: {
+    fontSize: 11,
+    marginTop: 4,
+    alignSelf: "flex-end",
+  },
+  myMessageTime: {
+    color: colors.messageTime,
+  },
+  otherMessageTime: {
+    color: colors.messageTime,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingTop: 100,
+  },
+  emptyIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginTop: 4,
+  },
+  inputContainer: {
+    flexDirection: "row",
+    padding: 8,
+    paddingBottom: 24,
+    backgroundColor: colors.background,
+    alignItems: "flex-end",
+  },
+  attachButton: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 4,
+  },
+  inputWrapper: {
+    flex: 1,
+    backgroundColor: colors.background,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginRight: 8,
+  },
+  input: {
+    fontSize: 16,
+    maxHeight: 100,
+    color: colors.textPrimary,
+  },
+  sendButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  sendButtonDisabled: {
+    backgroundColor: colors.textMuted,
+  },
+  editSendButton: {
+    backgroundColor: "#4CAF50",
+  },
+  sendIcon: {
+    color: colors.textLight,
+    fontSize: 20,
+  },
+  // Media styles
+  mediaBubble: {
+    padding: 4,
+    overflow: "hidden",
+  },
+  mediaImage: {
+    width: Dimensions.get("window").width * 0.6,
+    height: Dimensions.get("window").width * 0.6,
+    borderRadius: 14,
+    marginBottom: 4,
+  },
+  mediaVideo: {
+    width: Dimensions.get("window").width * 0.6,
+    height: Dimensions.get("window").width * 0.45,
+    borderRadius: 14,
+    marginBottom: 4,
+    backgroundColor: "#000",
+  },
+  audioContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    minWidth: 200,
+  },
+  myAudioContainer: {
+    backgroundColor: "transparent",
+  },
+  otherAudioContainer: {
+    backgroundColor: "transparent",
+  },
+  audioPlayButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  audioWaveform: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    height: 30,
+    gap: 2,
+  },
+  audioWaveBar: {
+    width: 3,
+    borderRadius: 1.5,
+    backgroundColor: colors.textMuted,
+  },
+  myAudioWaveBar: {
+    backgroundColor: "rgba(255,255,255,0.6)",
+  },
+  otherAudioWaveBar: {
+    backgroundColor: colors.primary,
+    opacity: 0.5,
+  },
+  audioWaveBarActive: {
+    opacity: 1,
+  },
+  audioDuration: {
+    fontSize: 12,
+    marginLeft: 8,
+  },
+  myAudioDuration: {
+    color: "rgba(255,255,255,0.8)",
+  },
+  otherAudioDuration: {
+    color: colors.textSecondary,
+  },
+  audioText: {
+    marginLeft: 10,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  // Attach menu styles
+  attachMenu: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    backgroundColor: colors.background,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  attachMenuItem: {
+    alignItems: "center",
+  },
+  attachMenuIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  attachMenuText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  // Recording styles
+  recordingIndicator: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  recordingDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.error,
+    marginRight: 10,
+  },
+  recordingText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  cancelRecordingButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.inputBackground,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  stopRecordingButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.error,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  // Editing styles
+  editingContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.background,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+  },
+  editingInfo: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  editingLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
+    marginLeft: 8,
+    marginRight: 8,
+  },
+  editingText: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  editingCancel: {
+    padding: 4,
+  },
+  editedLabel: {
+    fontSize: 11,
+    color: colors.textMuted,
+    fontStyle: "italic",
+    marginTop: 2,
+  },
+  // Message Menu styles
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  menuContainer: {
+    backgroundColor: colors.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 34,
+    paddingTop: 8,
+  },
+  menuHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: colors.border,
+    borderRadius: 2,
+    alignSelf: "center",
+    marginBottom: 16,
+  },
+  menuPreview: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: colors.inputBackground,
+    borderRadius: 12,
+  },
+  menuPreviewText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  menuActions: {
+    paddingHorizontal: 16,
+  },
+  menuActionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  menuActionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  menuActionText: {
+    fontSize: 16,
+    color: colors.textPrimary,
+    fontWeight: "500",
+  },
+  menuCancelButton: {
+    marginTop: 12,
+    marginHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: colors.inputBackground,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  menuCancelText: {
+    fontSize: 16,
+    color: colors.primary,
+    fontWeight: "600",
+  },
+  // Hold-to-record & Media picker styles
+  plusButton: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 8,
+  },
+  micButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  recordingContainer: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.inputBackground,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginRight: 10,
+  },
+  recordingTime: {
+    fontSize: 16,
+    color: colors.textPrimary,
+    fontWeight: "500",
+    marginRight: 12,
+  },
+  recordingHint: {
+    fontSize: 13,
+    color: colors.textMuted,
+    flex: 1,
+  },
+  mediaPickerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  mediaPickerContainer: {
+    backgroundColor: colors.background,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: 40,
+    paddingTop: 12,
+  },
+  mediaPickerHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: colors.border,
+    borderRadius: 2,
+    alignSelf: "center",
+    marginBottom: 20,
+  },
+  mediaPickerTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: colors.textPrimary,
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  mediaPickerGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-around",
+    paddingHorizontal: 20,
+  },
+  mediaPickerItem: {
+    width: "25%",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  mediaPickerIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  mediaPickerLabel: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  mediaPickerCancel: {
+    marginHorizontal: 20,
+    paddingVertical: 14,
+    backgroundColor: colors.inputBackground,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  mediaPickerCancelText: {
+    fontSize: 16,
+    color: colors.primary,
+    fontWeight: "600",
+  },
+  // Recording wrapper for better UI
+  recordingWrapper: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  sendRecordingButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  // Fullscreen media viewer
+  fullscreenOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  fullscreenCloseButton: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  fullscreenImage: {
+    width: Dimensions.get("window").width,
+    height: Dimensions.get("window").height * 0.8,
+  },
+  fullscreenVideo: {
+    width: Dimensions.get("window").width,
+    height: Dimensions.get("window").height * 0.7,
+  },
+});

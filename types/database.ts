@@ -82,6 +82,8 @@ export interface Database {
           media_type: "image" | "video" | "audio" | null;
           created_at: string;
           updated_at: string | null;
+          is_read: boolean;
+          reply_to_id: string | null;
         };
         Insert: {
           id?: string;
@@ -92,6 +94,8 @@ export interface Database {
           media_type?: "image" | "video" | "audio" | null;
           created_at?: string;
           updated_at?: string | null;
+          is_read?: boolean;
+          reply_to_id?: string | null;
         };
         Update: {
           id?: string;
@@ -102,6 +106,52 @@ export interface Database {
           media_type?: "image" | "video" | "audio" | null;
           updated_at?: string | null;
           created_at?: string;
+          is_read?: boolean;
+          reply_to_id?: string | null;
+        };
+        Relationships: [];
+      };
+      push_tokens: {
+        Row: {
+          id: string;
+          user_id: string;
+          token: string;
+          platform: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          token: string;
+          platform: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          token?: string;
+          platform?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      user_presence: {
+        Row: {
+          user_id: string;
+          is_online: boolean;
+          last_seen: string;
+        };
+        Insert: {
+          user_id: string;
+          is_online?: boolean;
+          last_seen?: string;
+        };
+        Update: {
+          user_id?: string;
+          is_online?: boolean;
+          last_seen?: string;
         };
         Relationships: [];
       };

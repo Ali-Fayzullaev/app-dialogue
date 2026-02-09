@@ -1,8 +1,10 @@
 import { colors, getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { sendLocalNotification } from "@/hooks/use-push-notifications";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { decode } from "base64-arraybuffer";
+import * as Device from "expo-device";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
@@ -242,7 +244,22 @@ export default function ProfileScreen() {
         <TouchableOpacity
           style={styles.menuItem}
           activeOpacity={0.6}
-          onPress={safeHaptic}
+          onPress={async () => {
+            safeHaptic();
+            if (!Device.isDevice) {
+              Alert.alert(
+                "Только на устройстве",
+                "Push-уведомления работают только на реальном устройстве, не в эмуляторе",
+              );
+              return;
+            }
+            await sendLocalNotification(
+              "Тестовое уведомление 🎉",
+              "Push-уведомления работают!",
+              { test: true },
+            );
+            safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+          }}
         >
           <View style={styles.menuItemLeft}>
             <View style={[styles.menuIcon, { backgroundColor: "#FF6B6B20" }]}>
@@ -252,9 +269,9 @@ export default function ProfileScreen() {
                 color="#FF6B6B"
               />
             </View>
-            <Text style={styles.menuItemText}>Уведомления</Text>
+            <Text style={styles.menuItemText}>Тест уведомлений</Text>
           </View>
-          <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+          <Ionicons name="send" size={18} color={colors.primary} />
         </TouchableOpacity>
 
         <View style={styles.divider} />

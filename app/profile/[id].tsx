@@ -487,7 +487,11 @@ export default function UserProfileScreen() {
           style={styles.backButton}
           onPress={() => {
             safeHaptic();
-            router.back();
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace("/(tabs)");
+            }
           }}
         >
           <Ionicons name="arrow-back" size={24} color={colors.textLight} />

@@ -5,8 +5,8 @@ import { Platform } from "react-native";
 
 // ⚠️ ВАЖНО: Замени эти значения на свои из Supabase Dashboard
 // Settings -> API -> Project URL и anon public key
-const SUPABASE_URL = "https://ryzpxwvdcmnxgwwrckbp.supabase.co";
-const SUPABASE_ANON_KEY =
+export const SUPABASE_URL = "https://ryzpxwvdcmnxgwwrckbp.supabase.co";
+export const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ5enB4d3ZkY21ueGd3d3Jja2JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA1OTc5MTcsImV4cCI6MjA4NjE3MzkxN30.OpHnpHVeNQ9N8xoFpKwuiyjO6chmIhC-2tGXbEPy75w";
 
 // Адаптер хранилища для Expo (работает на iOS, Android и Web)

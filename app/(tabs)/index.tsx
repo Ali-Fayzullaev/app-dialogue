@@ -20,6 +20,8 @@ import {
 interface ChatItem extends Chat {
   members: Profile[];
   last_message: Message | null;
+  unread_count: number;
+  other_user_online: boolean;
 }
 
 export default function ChatsScreen() {
@@ -74,10 +76,34 @@ export default function ChatsScreen() {
             .order("created_at", { ascending: false })
             .limit(1);
 
+          // Получаем количество непрочитанных сообщений
+          const { count: unreadCount } = await supabase
+            .from("messages")
+            .select("*", { count: "exact", head: true })
+            .eq("chat_id", chat.id)
+            .neq("sender_id", user.id)
+            .eq("is_read", false);
+
+          // Получаем онлайн статус собеседника
+          const otherMemberId = memberIds.find((id) => id !== user.id);
+          let otherUserOnline = false;
+
+          if (otherMemberId) {
+            const { data: presence } = await supabase
+              .from("user_presence")
+              .select("is_online")
+              .eq("user_id", otherMemberId)
+              .single();
+
+            otherUserOnline = presence?.is_online || false;
+          }
+
           return {
             ...chat,
             members: profiles || [],
             last_message: lastMessages?.[0] || null,
+            unread_count: unreadCount || 0,
+            other_user_online: otherUserOnline,
           };
         }),
       );
@@ -156,32 +182,63 @@ export default function ChatsScreen() {
         onPress={handlePress}
         activeOpacity={0.7}
       >
-        {otherMember?.avatar_url ? (
-          <Image
-            source={{ uri: otherMember.avatar_url }}
-            style={styles.avatarImage}
-          />
-        ) : (
-          <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-            <Text style={styles.avatarText}>
-              {getChatName(item).charAt(0).toUpperCase()}
-            </Text>
-          </View>
-        )}
+        <View style={styles.avatarWrapper}>
+          {otherMember?.avatar_url ? (
+            <Image
+              source={{ uri: otherMember.avatar_url }}
+              style={styles.avatarImage}
+            />
+          ) : (
+            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+              <Text style={styles.avatarText}>
+                {getChatName(item).charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+          {item.other_user_online && <View style={styles.onlineIndicator} />}
+        </View>
         <View style={styles.chatInfo}>
           <View style={styles.chatHeader}>
             <Text style={styles.chatName} numberOfLines={1}>
               {getChatName(item)}
             </Text>
-            {item.last_message && (
-              <Text style={styles.chatTime}>
-                {formatTime(item.last_message.created_at)}
-              </Text>
+            <View style={styles.chatHeaderRight}>
+              {item.last_message && (
+                <Text
+                  style={[
+                    styles.chatTime,
+                    item.unread_count > 0 && styles.chatTimeUnread,
+                  ]}
+                >
+                  {formatTime(item.last_message.created_at)}
+                </Text>
+              )}
+            </View>
+          </View>
+          <View style={styles.chatFooter}>
+            <Text
+              style={[
+                styles.lastMessage,
+                item.unread_count > 0 && styles.lastMessageUnread,
+              ]}
+              numberOfLines={1}
+            >
+              {item.last_message?.media_type
+                ? item.last_message.media_type === "image"
+                  ? "📷 Фото"
+                  : item.last_message.media_type === "video"
+                    ? "🎬 Видео"
+                    : "🎵 Аудио"
+                : item.last_message?.content || "Нет сообщений"}
+            </Text>
+            {item.unread_count > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>
+                  {item.unread_count > 99 ? "99+" : item.unread_count}
+                </Text>
+              </View>
             )}
           </View>
-          <Text style={styles.lastMessage} numberOfLines={1}>
-            {item.last_message?.content || "Нет сообщений"}
-          </Text>
         </View>
       </TouchableOpacity>
     );
@@ -315,20 +372,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
   },
+  avatarWrapper: {
+    position: "relative",
+    marginRight: 14,
+  },
   avatar: {
     width: 56,
     height: 56,
     borderRadius: 28,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 14,
   },
   avatarImage: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    marginRight: 14,
     backgroundColor: colors.border,
+  },
+  onlineIndicator: {
+    position: "absolute",
+    bottom: 2,
+    right: 2,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: "#4CAF50",
+    borderWidth: 2,
+    borderColor: colors.background,
   },
   avatarText: {
     color: colors.textLight,
@@ -359,9 +429,42 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textMuted,
   },
+  chatTimeUnread: {
+    color: colors.primary,
+    fontWeight: "500",
+  },
+  chatFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  chatHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   lastMessage: {
     fontSize: 15,
     color: colors.textSecondary,
+    flex: 1,
+    marginRight: 8,
+  },
+  lastMessageUnread: {
+    color: colors.textPrimary,
+    fontWeight: "500",
+  },
+  unreadBadge: {
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    paddingHorizontal: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  unreadBadgeText: {
+    color: colors.textLight,
+    fontSize: 13,
+    fontWeight: "bold",
   },
   emptyContainer: {
     flex: 1,

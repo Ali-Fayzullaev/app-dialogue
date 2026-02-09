@@ -1,5 +1,6 @@
 import { colors, getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useUserOnlineStatus } from "@/hooks/use-presence";
 import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
 import { Message, Profile } from "@/types/database";
@@ -31,6 +32,12 @@ import {
 
 interface MessageWithSender extends Message {
   sender: Profile | null;
+  replied_message?: {
+    id: string;
+    content: string | null;
+    sender: Profile | null;
+    media_type: "image" | "video" | "audio" | null;
+  } | null;
 }
 
 // Безопасная вибрация (не работает на веб)
@@ -73,6 +80,7 @@ export default function ChatScreen() {
   const soundRef = useRef<Audio.Sound | null>(null);
   const [editingMessage, setEditingMessage] =
     useState<MessageWithSender | null>(null);
+  const [replyingTo, setReplyingTo] = useState<MessageWithSender | null>(null);
   const [selectedMessage, setSelectedMessage] =
     useState<MessageWithSender | null>(null);
   const [showMessageMenu, setShowMessageMenu] = useState(false);
@@ -84,6 +92,11 @@ export default function ChatScreen() {
     url: string;
     type: "image" | "video";
   } | null>(null);
+
+  // Онлайн статус собеседника
+  const { isOnline, formatLastSeen } = useUserOnlineStatus(
+    otherUser?.id || null,
+  );
 
   useEffect(() => {
     fetchChatInfo();
@@ -165,12 +178,49 @@ export default function ChatScreen() {
 
       const profileMap = new Map(profiles?.map((p) => [p.id, p]));
 
-      const messagesWithSenders: MessageWithSender[] = (data || []).map(
-        (m) => ({
+      // Собираем ID сообщений на которые отвечают
+      const replyToIds = (
+        data?.filter((m) => m.reply_to_id).map((m) => m.reply_to_id) || []
+      ).filter((id): id is string => id !== null);
+
+      // Получаем replied messages
+      let repliedMessagesMap = new Map<
+        string,
+        {
+          id: string;
+          content: string | null;
+          sender_id: string;
+          media_type: "image" | "video" | "audio" | null;
+        }
+      >();
+      if (replyToIds.length > 0) {
+        const { data: repliedMessages } = await supabase
+          .from("messages")
+          .select("id, content, sender_id, media_type")
+          .in("id", replyToIds);
+
+        repliedMessagesMap = new Map(
+          repliedMessages?.map((m) => [m.id, m]) || [],
+        );
+      }
+
+      const messagesWithSenders: MessageWithSender[] = (data || []).map((m) => {
+        const repliedMsg = m.reply_to_id
+          ? repliedMessagesMap.get(m.reply_to_id)
+          : null;
+        return {
           ...m,
           sender: profileMap.get(m.sender_id) || null,
-        }),
-      );
+          replied_message: repliedMsg
+            ? {
+                id: repliedMsg.id,
+                content: repliedMsg.content,
+                sender: profileMap.get(repliedMsg.sender_id) || null,
+                media_type: repliedMsg.media_type,
+              }
+            : null,
+        };
+      });
 
       setMessages(messagesWithSenders);
     } catch (error) {
@@ -202,20 +252,100 @@ export default function ChatScreen() {
             .eq("id", newMsg.sender_id)
             .single();
 
+          // Получаем replied message если есть
+          let repliedMessage = null;
+          if (newMsg.reply_to_id) {
+            const { data: repliedData } = await supabase
+              .from("messages")
+              .select("id, content, sender_id, media_type")
+              .eq("id", newMsg.reply_to_id)
+              .single();
+
+            if (repliedData) {
+              const { data: repliedSender } = await supabase
+                .from("profiles")
+                .select("*")
+                .eq("id", repliedData.sender_id)
+                .single();
+
+              repliedMessage = {
+                id: repliedData.id,
+                content: repliedData.content,
+                sender: repliedSender || null,
+                media_type: repliedData.media_type,
+              };
+            }
+          }
+
           const messageWithSender: MessageWithSender = {
             ...newMsg,
             sender: senderProfile,
+            replied_message: repliedMessage,
           };
 
           setMessages((prev) => [...prev, messageWithSender]);
+
+          // Если сообщение от другого — помечаем как прочитанное
+          if (newMsg.sender_id !== user?.id) {
+            markMessagesAsRead();
+          }
 
           setTimeout(() => {
             flatListRef.current?.scrollToEnd({ animated: true });
           }, 100);
         },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "messages",
+          filter: `chat_id=eq.${id}`,
+        },
+        (payload) => {
+          const updatedMsg = payload.new as Message;
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === updatedMsg.id ? { ...msg, ...updatedMsg } : msg,
+            ),
+          );
+        },
+      )
       .subscribe();
   };
+
+  // Пометить сообщения как прочитанные
+  const markMessagesAsRead = async () => {
+    if (!id || !user) return;
+
+    try {
+      // Помечаем все непрочитанные сообщения от других пользователей
+      const { error } = await supabase
+        .from("messages")
+        .update({ is_read: true })
+        .eq("chat_id", id)
+        .neq("sender_id", user.id)
+        .eq("is_read", false);
+
+      if (error) {
+        console.error("Error marking messages as read:", error);
+      }
+    } catch (error) {
+      console.error("Error marking messages as read:", error);
+    }
+  };
+
+  // Вызываем при загрузке чата и при получении новых сообщений
+  useEffect(() => {
+    if (id && user && !loading) {
+      // Небольшая задержка чтобы сообщения успели загрузиться
+      const timer = setTimeout(() => {
+        markMessagesAsRead();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [id, user, loading]);
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !user || !id || sending) return;
@@ -245,13 +375,27 @@ export default function ChatScreen() {
         setEditingMessage(null);
       } else {
         // Отправка нового сообщения
-        const { error } = await supabase.from("messages").insert({
+        const messageData: {
+          chat_id: string;
+          sender_id: string;
+          content: string;
+          reply_to_id?: string;
+        } = {
           chat_id: id,
           sender_id: user.id,
           content: messageText,
-        });
+        };
+
+        // Добавляем reply_to_id если отвечаем на сообщение
+        if (replyingTo) {
+          messageData.reply_to_id = replyingTo.id;
+        }
+
+        const { error } = await supabase.from("messages").insert(messageData);
 
         if (error) throw error;
+
+        setReplyingTo(null);
       }
     } catch (error) {
       console.error("Error sending message:", error);
@@ -293,6 +437,10 @@ export default function ChatScreen() {
       if (!selectedMessage) return;
 
       switch (action) {
+        case "reply":
+          setReplyingTo(selectedMessage);
+          safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+          break;
         case "edit":
           if (
             selectedMessage.content &&
@@ -325,6 +473,10 @@ export default function ChatScreen() {
   const cancelEditing = () => {
     setEditingMessage(null);
     setNewMessage("");
+  };
+
+  const cancelReply = () => {
+    setReplyingTo(null);
   };
 
   const confirmDeleteMessage = (message: MessageWithSender) => {
@@ -711,6 +863,47 @@ export default function ChatScreen() {
               item.media_url && styles.mediaBubble,
             ]}
           >
+            {/* Replied message quote */}
+            {item.replied_message && (
+              <TouchableOpacity
+                style={[
+                  styles.repliedMessageContainer,
+                  isMyMessage && styles.repliedMessageContainerMy,
+                ]}
+                activeOpacity={0.7}
+                onPress={() => {
+                  // Scroll to replied message
+                  const replyIndex = messages.findIndex(
+                    (m) => m.id === item.replied_message?.id,
+                  );
+                  if (replyIndex !== -1) {
+                    flatListRef.current?.scrollToIndex({
+                      index: replyIndex,
+                      animated: true,
+                    });
+                  }
+                }}
+              >
+                <Text style={styles.repliedMessageSender}>
+                  {item.replied_message.sender?.username || "Пользователь"}
+                </Text>
+                <Text
+                  style={[
+                    styles.repliedMessageText,
+                    isMyMessage && styles.repliedMessageTextMy,
+                  ]}
+                  numberOfLines={2}
+                >
+                  {item.replied_message.content ||
+                    (item.replied_message.media_type === "image"
+                      ? "📷 Фото"
+                      : item.replied_message.media_type === "video"
+                        ? "📹 Видео"
+                        : "🎵 Аудио")}
+                </Text>
+              </TouchableOpacity>
+            )}
+
             {/* Media content */}
             {item.media_url && item.media_type === "image" && (
               <TouchableOpacity
@@ -817,12 +1010,14 @@ export default function ChatScreen() {
             >
               {formatMessageTime(item.created_at)}
               {isMyMessage && (
-                <Ionicons
-                  name="checkmark-done"
-                  size={14}
-                  color={colors.messageTime}
-                  style={{ marginLeft: 4 }}
-                />
+                <Text style={{ marginLeft: 4 }}>
+                  {" "}
+                  <Ionicons
+                    name={item.is_read ? "checkmark-done" : "checkmark"}
+                    size={14}
+                    color={item.is_read ? "#4FC3F7" : colors.messageTime}
+                  />
+                </Text>
               )}
             </Text>
             {item.updated_at && item.updated_at !== item.created_at && (
@@ -856,7 +1051,11 @@ export default function ChatScreen() {
           style={styles.backButton}
           onPress={() => {
             safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-            router.back();
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace("/(tabs)");
+            }
           }}
         >
           <Ionicons name="arrow-back" size={24} color={colors.textLight} />
@@ -873,23 +1072,36 @@ export default function ChatScreen() {
           activeOpacity={0.7}
         >
           {otherUser?.avatar_url ? (
-            <Image
-              source={{ uri: otherUser.avatar_url }}
-              style={styles.headerAvatarImage}
-            />
+            <View style={styles.avatarWrapper}>
+              <Image
+                source={{ uri: otherUser.avatar_url }}
+                style={styles.headerAvatarImage}
+              />
+              {isOnline && <View style={styles.onlineIndicator} />}
+            </View>
           ) : (
-            <View
-              style={[styles.headerAvatar, { backgroundColor: avatarColor }]}
-            >
-              <Text style={styles.headerAvatarText}>
-                {chatName.charAt(0).toUpperCase()}
-              </Text>
+            <View style={styles.avatarWrapper}>
+              <View
+                style={[styles.headerAvatar, { backgroundColor: avatarColor }]}
+              >
+                <Text style={styles.headerAvatarText}>
+                  {chatName.charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              {isOnline && <View style={styles.onlineIndicator} />}
             </View>
           )}
 
           <View style={styles.headerInfo}>
             <Text style={styles.headerName}>{chatName}</Text>
-            <Text style={styles.headerStatus}>был(а) недавно</Text>
+            <Text
+              style={[
+                styles.headerStatus,
+                isOnline && styles.headerStatusOnline,
+              ]}
+            >
+              {formatLastSeen()}
+            </Text>
           </View>
         </TouchableOpacity>
       </View>
@@ -975,6 +1187,29 @@ export default function ChatScreen() {
             onPress={cancelEditing}
             style={styles.editingCancel}
           >
+            <Ionicons name="close" size={20} color={colors.textMuted} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Reply indicator */}
+      {replyingTo && !editingMessage && (
+        <View style={styles.replyContainer}>
+          <View style={styles.replyBar} />
+          <View style={styles.replyInfo}>
+            <Text style={styles.replyLabel}>
+              Ответ для {replyingTo.sender?.username || "Пользователь"}
+            </Text>
+            <Text style={styles.replyText} numberOfLines={1}>
+              {replyingTo.content ||
+                (replyingTo.media_type === "image"
+                  ? "📷 Фото"
+                  : replyingTo.media_type === "video"
+                    ? "📹 Видео"
+                    : "🎵 Аудио")}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={cancelReply} style={styles.replyCancel}>
             <Ionicons name="close" size={20} color={colors.textMuted} />
           </TouchableOpacity>
         </View>
@@ -1237,6 +1472,27 @@ export default function ChatScreen() {
 
                 {/* Menu Actions */}
                 <View style={styles.menuActions}>
+                  {/* Ответить */}
+                  <TouchableOpacity
+                    style={styles.menuActionItem}
+                    onPress={() => handleMenuAction("reply")}
+                    activeOpacity={0.7}
+                  >
+                    <View
+                      style={[
+                        styles.menuActionIcon,
+                        { backgroundColor: "#FF9500" },
+                      ]}
+                    >
+                      <Ionicons
+                        name="arrow-undo-outline"
+                        size={22}
+                        color="#fff"
+                      />
+                    </View>
+                    <Text style={styles.menuActionText}>Ответить</Text>
+                  </TouchableOpacity>
+
                   {selectedMessage.content && (
                     <TouchableOpacity
                       style={styles.menuActionItem}
@@ -1384,19 +1640,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flex: 1,
   },
+  avatarWrapper: {
+    position: "relative",
+    marginRight: 12,
+  },
   headerAvatar: {
     width: 42,
     height: 42,
     borderRadius: 21,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
   },
   headerAvatarImage: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    marginRight: 12,
+  },
+  onlineIndicator: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: "#4CAF50",
+    borderWidth: 2,
+    borderColor: colors.primary,
   },
   headerAvatarText: {
     color: colors.textLight,
@@ -1415,6 +1684,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "rgba(255,255,255,0.8)",
     marginTop: 2,
+  },
+  headerStatusOnline: {
+    color: "#81C784",
+    fontWeight: "500",
   },
   messagesContainer: {
     flex: 1,
@@ -1731,6 +2004,64 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontStyle: "italic",
     marginTop: 2,
+  },
+  // Reply styles
+  replyContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.background,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  replyBar: {
+    width: 3,
+    height: "100%",
+    backgroundColor: "#FF9500",
+    borderRadius: 2,
+    marginRight: 10,
+  },
+  replyInfo: {
+    flex: 1,
+  },
+  replyLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#FF9500",
+    marginBottom: 2,
+  },
+  replyText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  replyCancel: {
+    padding: 4,
+  },
+  // Replied message in bubble
+  repliedMessageContainer: {
+    backgroundColor: "rgba(0, 0, 0, 0.05)",
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 6,
+    borderLeftWidth: 2,
+    borderLeftColor: "#FF9500",
+  },
+  repliedMessageContainerMy: {
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+  },
+  repliedMessageSender: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#FF9500",
+    marginBottom: 2,
+  },
+  repliedMessageText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  repliedMessageTextMy: {
+    color: "rgba(255, 255, 255, 0.8)",
   },
   // Message Menu styles
   menuOverlay: {

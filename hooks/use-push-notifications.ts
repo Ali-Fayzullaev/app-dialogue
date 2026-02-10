@@ -204,3 +204,50 @@ export async function sendLocalNotification(
     trigger: null, // Немедленно
   });
 }
+
+// Настройка канала для звонков (высокий приоритет)
+export async function setupCallNotificationChannel() {
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("calls", {
+      name: "Звонки",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 500, 200, 500, 200, 500],
+      lightColor: "#4CAF50",
+      sound: "default",
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      bypassDnd: true,
+    });
+  }
+}
+
+// Отправка уведомления о входящем звонке
+export async function sendCallNotification(
+  callerName: string,
+  callType: "audio" | "video",
+  callId: string,
+  chatId: string,
+) {
+  await setupCallNotificationChannel();
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: callerName,
+      body: callType === "video" ? "Видеозвонок..." : "Аудиозвонок...",
+      data: {
+        type: "incoming_call",
+        callId,
+        chatId,
+        callType,
+      },
+      sound: "default",
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      categoryIdentifier: "call",
+    },
+    trigger: null,
+  });
+}
+
+// Отменить уведомление о звонке
+export async function cancelCallNotification() {
+  await Notifications.dismissAllNotificationsAsync();
+}

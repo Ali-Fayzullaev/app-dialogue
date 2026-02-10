@@ -167,6 +167,72 @@ export interface Database {
         };
         Relationships: [];
       };
+      calls: {
+        Row: {
+          id: string;
+          chat_id: string;
+          caller_id: string;
+          receiver_id: string;
+          call_type: "audio" | "video";
+          status:
+            | "pending"
+            | "ringing"
+            | "active"
+            | "ended"
+            | "missed"
+            | "declined"
+            | "failed";
+          daily_room_name: string | null;
+          daily_room_url: string | null;
+          started_at: string | null;
+          ended_at: string | null;
+          duration_seconds: number | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          chat_id: string;
+          caller_id: string;
+          receiver_id: string;
+          call_type: "audio" | "video";
+          status?:
+            | "pending"
+            | "ringing"
+            | "active"
+            | "ended"
+            | "missed"
+            | "declined"
+            | "failed";
+          daily_room_name?: string | null;
+          daily_room_url?: string | null;
+          started_at?: string | null;
+          ended_at?: string | null;
+          duration_seconds?: number | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          chat_id?: string;
+          caller_id?: string;
+          receiver_id?: string;
+          call_type?: "audio" | "video";
+          status?:
+            | "pending"
+            | "ringing"
+            | "active"
+            | "ended"
+            | "missed"
+            | "declined"
+            | "failed";
+          daily_room_name?: string | null;
+          daily_room_url?: string | null;
+          started_at?: string | null;
+          ended_at?: string | null;
+          duration_seconds?: number | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: {};
     Functions: {};
@@ -180,6 +246,7 @@ export type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 export type Chat = Database["public"]["Tables"]["chats"]["Row"];
 export type ChatMember = Database["public"]["Tables"]["chat_members"]["Row"];
 export type Message = Database["public"]["Tables"]["messages"]["Row"];
+export type CallRecord = Database["public"]["Tables"]["calls"]["Row"];
 
 // Роль участника в чате
 export type ChatRole = "admin" | "member";

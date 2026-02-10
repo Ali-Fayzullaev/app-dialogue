@@ -2,6 +2,7 @@ import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
+import { CallType, initiateCall } from "@/lib/call-service";
 import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
 import { Message, Profile } from "@/types/database";
@@ -870,6 +871,43 @@ export default function ChatScreen() {
       setShowMessageMenu(false);
       setSelectedMessage(null);
     });
+  };
+
+  // Начать звонок
+  const startCall = async (callType: CallType) => {
+    if (!user || !id) return;
+
+    safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
+
+    // Получаем ID получателя (для личного чата)
+    const receiverId = isGroup ? null : otherUser?.id || null;
+
+    if (!receiverId) {
+      Alert.alert("Ошибка", "Не удалось определить получателя звонка");
+      return;
+    }
+
+    const result = await initiateCall(
+      id as string,
+      user.id,
+      receiverId,
+      callType,
+    );
+
+    if (result) {
+      // Переходим на экран звонка
+      router.push({
+        pathname: `/call/${result.call.id}`,
+        params: {
+          roomUrl: result.roomUrl,
+          token: result.token,
+          callType: callType,
+          isIncoming: "false",
+        },
+      } as any);
+    } else {
+      Alert.alert("Ошибка", "Не удалось начать звонок. Попробуйте позже.");
+    }
   };
 
   const handleMenuAction = (
@@ -1834,6 +1872,22 @@ export default function ChatScreen() {
                 : formatLastSeen()}
             </Text>
           </View>
+        </TouchableOpacity>
+
+        {/* Кнопка аудио звонка */}
+        <TouchableOpacity
+          style={styles.headerCallButton}
+          onPress={() => startCall("audio")}
+        >
+          <Ionicons name="call" size={20} color={colors.textLight} />
+        </TouchableOpacity>
+
+        {/* Кнопка видео звонка */}
+        <TouchableOpacity
+          style={styles.headerCallButton}
+          onPress={() => startCall("video")}
+        >
+          <Ionicons name="videocam" size={22} color={colors.textLight} />
         </TouchableOpacity>
 
         {/* Кнопка поиска */}
@@ -3921,6 +3975,14 @@ const styles = StyleSheet.create({
   pinOptionCancelText: {
     fontSize: 17,
     fontWeight: "600",
+  },
+  // Call button styles
+  headerCallButton: {
+    width: 36,
+    height: 36,
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 4,
   },
   // Search styles
   headerSearchButton: {

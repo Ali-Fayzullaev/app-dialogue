@@ -96,11 +96,57 @@ export default function ChatScreen() {
     url: string;
     type: "image" | "video";
   } | null>(null);
+  const [typingUsers, setTypingUsers] = useState<
+    { id: string; username: string; avatar_url: string | null }[]
+  >([]);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTypingSentRef = useRef<number>(0);
+  const typingDot1 = useRef(new Animated.Value(0.3)).current;
+  const typingDot2 = useRef(new Animated.Value(0.3)).current;
+  const typingDot3 = useRef(new Animated.Value(0.3)).current;
 
   // Онлайн статус собеседника
   const { isOnline, formatLastSeen } = useUserOnlineStatus(
     otherUser?.id || null,
   );
+
+  // Анимация точек печатания
+  useEffect(() => {
+    if (typingUsers.length > 0) {
+      const animateDot = (dot: Animated.Value, delay: number) => {
+        return Animated.loop(
+          Animated.sequence([
+            Animated.delay(delay),
+            Animated.timing(dot, {
+              toValue: 1,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+            Animated.timing(dot, {
+              toValue: 0.3,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+          ]),
+        );
+      };
+
+      const animations = Animated.parallel([
+        animateDot(typingDot1, 0),
+        animateDot(typingDot2, 150),
+        animateDot(typingDot3, 300),
+      ]);
+
+      animations.start();
+
+      return () => {
+        animations.stop();
+        typingDot1.setValue(0.3);
+        typingDot2.setValue(0.3);
+        typingDot3.setValue(0.3);
+      };
+    }
+  }, [typingUsers.length]);
 
   useEffect(() => {
     fetchChatInfo();
@@ -326,7 +372,49 @@ export default function ChatScreen() {
           );
         },
       )
+      .on("broadcast", { event: "typing" }, (payload) => {
+        const { userId, username, avatarUrl, isTyping } = payload.payload;
+        if (userId === user?.id) return;
+
+        setTypingUsers((prev) => {
+          if (isTyping) {
+            // Добавляем или обновляем
+            const exists = prev.find((u) => u.id === userId);
+            if (exists) return prev;
+            return [...prev, { id: userId, username, avatar_url: avatarUrl }];
+          } else {
+            // Удаляем
+            return prev.filter((u) => u.id !== userId);
+          }
+        });
+
+        // Автоматически убираем через 3 секунды
+        setTimeout(() => {
+          setTypingUsers((prev) => prev.filter((u) => u.id !== userId));
+        }, 3000);
+      })
       .subscribe();
+  };
+
+  // Отправить индикатор печати
+  const sendTypingIndicator = (isTyping: boolean) => {
+    if (!channelRef.current || !user) return;
+
+    // Throttle - не чаще раз в 2 секунды
+    const now = Date.now();
+    if (isTyping && now - lastTypingSentRef.current < 2000) return;
+    lastTypingSentRef.current = now;
+
+    channelRef.current.send({
+      type: "broadcast",
+      event: "typing",
+      payload: {
+        userId: user.id,
+        username: user.user_metadata?.username || "User",
+        avatarUrl: user.user_metadata?.avatar_url || null,
+        isTyping,
+      },
+    });
   };
 
   // Пометить сообщения как прочитанные
@@ -1296,6 +1384,59 @@ export default function ChatScreen() {
             </View>
           }
         />
+
+        {/* Typing Indicator */}
+        {typingUsers.length > 0 && (
+          <View style={styles.typingContainer}>
+            <View style={styles.typingAvatars}>
+              {typingUsers.slice(0, 3).map((typingUser, index) => (
+                <View
+                  key={typingUser.id}
+                  style={[
+                    styles.typingAvatarWrapper,
+                    { marginLeft: index > 0 ? -8 : 0, zIndex: 3 - index },
+                  ]}
+                >
+                  {typingUser.avatar_url ? (
+                    <Image
+                      source={{ uri: typingUser.avatar_url }}
+                      style={styles.typingAvatar}
+                    />
+                  ) : (
+                    <View
+                      style={[
+                        styles.typingAvatarPlaceholder,
+                        { backgroundColor: getAvatarColor(typingUser.id) },
+                      ]}
+                    >
+                      <Text style={styles.typingAvatarText}>
+                        {typingUser.username.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              ))}
+            </View>
+            <View style={styles.typingBubble}>
+              <View style={styles.typingDots}>
+                <Animated.View
+                  style={[styles.typingDot, { opacity: typingDot1 }]}
+                />
+                <Animated.View
+                  style={[styles.typingDot, { opacity: typingDot2 }]}
+                />
+                <Animated.View
+                  style={[styles.typingDot, { opacity: typingDot3 }]}
+                />
+              </View>
+            </View>
+            <Text style={styles.typingText}>
+              {typingUsers.length === 1
+                ? `${typingUsers[0].username} печатает...`
+                : `${typingUsers.length} печатают...`}
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* Android Attach Menu */}
@@ -1431,7 +1572,13 @@ export default function ChatScreen() {
               <TextInput
                 style={styles.input}
                 value={newMessage}
-                onChangeText={setNewMessage}
+                onChangeText={(text) => {
+                  setNewMessage(text);
+                  if (text.trim()) {
+                    sendTypingIndicator(true);
+                  }
+                }}
+                onBlur={() => sendTypingIndicator(false)}
                 placeholder="Сообщение..."
                 placeholderTextColor={colors.textMuted}
                 multiline
@@ -2604,5 +2751,67 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#fff",
+  },
+  // Typing indicator styles
+  typingContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  typingAvatars: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  typingAvatarWrapper: {
+    marginLeft: -8,
+  },
+  typingAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: colors.background,
+  },
+  typingAvatarPlaceholder: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: colors.background,
+  },
+  typingAvatarText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: colors.textLight,
+  },
+  typingBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    gap: 6,
+  },
+  typingDots: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.textSecondary,
+  },
+  typingText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    marginLeft: 4,
   },
 });

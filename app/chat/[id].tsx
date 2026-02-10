@@ -1,5 +1,6 @@
-import { colors, getAvatarColor } from "@/constants/colors";
+import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
 import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
@@ -78,6 +79,7 @@ export default function ChatScreen() {
   const [chatAvatarUrl, setChatAvatarUrl] = useState<string | null>(null);
   const [showAvatarViewer, setShowAvatarViewer] = useState(false);
   const { user } = useAuth();
+  const { colors, isDark } = useTheme();
   const flatListRef = useRef<FlatList>(null);
   const skipAutoScrollRef = useRef(false);
   const router = useRouter();
@@ -1383,14 +1385,7 @@ export default function ChatScreen() {
   const highlightSearchText = (text: string, isMyMessage: boolean) => {
     if (!searchQuery || searchQuery.trim().length < 2) {
       return (
-        <Text
-          style={[
-            styles.messageText,
-            isMyMessage ? styles.myMessageText : styles.otherMessageText,
-          ]}
-        >
-          {text}
-        </Text>
+        <Text style={[styles.messageText, { color: colors.text }]}>{text}</Text>
       );
     }
 
@@ -1400,14 +1395,7 @@ export default function ChatScreen() {
 
     if (index === -1) {
       return (
-        <Text
-          style={[
-            styles.messageText,
-            isMyMessage ? styles.myMessageText : styles.otherMessageText,
-          ]}
-        >
-          {text}
-        </Text>
+        <Text style={[styles.messageText, { color: colors.text }]}>{text}</Text>
       );
     }
 
@@ -1416,12 +1404,7 @@ export default function ChatScreen() {
     const after = text.substring(index + searchQuery.length);
 
     return (
-      <Text
-        style={[
-          styles.messageText,
-          isMyMessage ? styles.myMessageText : styles.otherMessageText,
-        ]}
-      >
+      <Text style={[styles.messageText, { color: colors.text }]}>
         {before}
         <Text style={styles.searchHighlight}>{match}</Text>
         {after}
@@ -1512,8 +1495,14 @@ export default function ChatScreen() {
               style={[
                 styles.messageBubble,
                 isMyMessage
-                  ? styles.myMessageBubble
-                  : styles.otherMessageBubble,
+                  ? [
+                      styles.myMessageBubble,
+                      { backgroundColor: colors.messageMine },
+                    ]
+                  : [
+                      styles.otherMessageBubble,
+                      { backgroundColor: colors.messageOther },
+                    ],
                 item.media_url && styles.mediaBubble,
               ]}
             >
@@ -1533,7 +1522,14 @@ export default function ChatScreen() {
                 <TouchableOpacity
                   style={[
                     styles.repliedMessageContainer,
-                    isMyMessage && styles.repliedMessageContainerMy,
+                    {
+                      backgroundColor: isMyMessage
+                        ? "rgba(255,255,255,0.15)"
+                        : isDark
+                          ? "rgba(255,255,255,0.08)"
+                          : "rgba(0,0,0,0.05)",
+                      borderLeftColor: colors.primary,
+                    },
                   ]}
                   activeOpacity={0.7}
                   onPress={() => {
@@ -1549,13 +1545,22 @@ export default function ChatScreen() {
                     }
                   }}
                 >
-                  <Text style={styles.repliedMessageSender}>
+                  <Text
+                    style={[
+                      styles.repliedMessageSender,
+                      { color: colors.primary },
+                    ]}
+                  >
                     {item.replied_message.sender?.username || "Пользователь"}
                   </Text>
                   <Text
                     style={[
                       styles.repliedMessageText,
-                      isMyMessage && styles.repliedMessageTextMy,
+                      {
+                        color: isMyMessage
+                          ? "rgba(255,255,255,0.8)"
+                          : colors.textSecondary,
+                      },
                     ]}
                     numberOfLines={2}
                   >
@@ -1625,11 +1630,20 @@ export default function ChatScreen() {
                   onPress={() => playAudio(item.id, item.media_url!)}
                   activeOpacity={0.7}
                 >
-                  <View style={styles.audioPlayButton}>
+                  <View
+                    style={[
+                      styles.audioPlayButton,
+                      {
+                        backgroundColor: isMyMessage
+                          ? "rgba(255,255,255,0.25)"
+                          : colors.primary,
+                      },
+                    ]}
+                  >
                     <Ionicons
                       name={playingAudioId === item.id ? "pause" : "play"}
                       size={20}
-                      color={colors.textLight}
+                      color={isMyMessage ? "#fff" : colors.textLight}
                     />
                   </View>
                   <View style={styles.audioWaveform}>
@@ -1638,12 +1652,19 @@ export default function ChatScreen() {
                         key={i}
                         style={[
                           styles.audioWaveBar,
-                          { height: 4 + Math.random() * 16 },
-                          isMyMessage
-                            ? styles.myAudioWaveBar
-                            : styles.otherAudioWaveBar,
-                          playingAudioId === item.id &&
-                            styles.audioWaveBarActive,
+                          {
+                            height: 4 + Math.random() * 16,
+                            backgroundColor: isMyMessage
+                              ? "rgba(255,255,255,0.5)"
+                              : isDark
+                                ? colors.textMuted
+                                : colors.border,
+                          },
+                          playingAudioId === item.id && {
+                            backgroundColor: isMyMessage
+                              ? "rgba(255,255,255,0.9)"
+                              : colors.primary,
+                          },
                         ]}
                       />
                     ))}
@@ -1651,9 +1672,11 @@ export default function ChatScreen() {
                   <Text
                     style={[
                       styles.audioDuration,
-                      isMyMessage
-                        ? styles.myAudioDuration
-                        : styles.otherAudioDuration,
+                      {
+                        color: isMyMessage
+                          ? "rgba(255,255,255,0.8)"
+                          : colors.textSecondary,
+                      },
                     ]}
                   >
                     0:30
@@ -1664,12 +1687,7 @@ export default function ChatScreen() {
               {item.content
                 ? highlightSearchText(item.content, isMyMessage)
                 : null}
-              <Text
-                style={[
-                  styles.messageTime,
-                  isMyMessage ? styles.myMessageTime : styles.otherMessageTime,
-                ]}
-              >
+              <Text style={[styles.messageTime, { color: colors.messageTime }]}>
                 {formatMessageTime(item.created_at)}
                 {isMyMessage && (
                   <Text style={{ marginLeft: 4 }}>
@@ -1694,7 +1712,12 @@ export default function ChatScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View
+        style={[
+          styles.loadingContainer,
+          { backgroundColor: colors.background },
+        ]}
+      >
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
@@ -1705,12 +1728,12 @@ export default function ChatScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.backgroundChat }]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
     >
       {/* Custom Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: colors.primary }]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => {
@@ -1722,7 +1745,7 @@ export default function ChatScreen() {
             }
           }}
         >
-          <Ionicons name="arrow-back" size={24} color={colors.textLight} />
+          <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -2293,12 +2316,20 @@ export default function ChatScreen() {
 
       {/* Reply indicator */}
       {replyingTo && !editingMessage && (
-        <View style={styles.replyContainer}>
-          <View style={styles.replyInfo}>
-            <Text style={styles.replyLabel}>
+        <View
+          style={[
+            styles.replyContainer,
+            { backgroundColor: colors.card, borderTopColor: colors.border },
+          ]}
+        >
+          <View style={[styles.replyInfo, { borderLeftColor: colors.primary }]}>
+            <Text style={[styles.replyLabel, { color: colors.primary }]}>
               Ответ для {replyingTo.sender?.username || "Пользователь"}
             </Text>
-            <Text style={styles.replyText} numberOfLines={1}>
+            <Text
+              style={[styles.replyText, { color: colors.textSecondary }]}
+              numberOfLines={1}
+            >
               {replyingTo.content ||
                 (replyingTo.media_type === "image"
                   ? "📷 Фото"
@@ -2314,7 +2345,12 @@ export default function ChatScreen() {
       )}
 
       {/* Input */}
-      <View style={styles.inputContainer}>
+      <View
+        style={[
+          styles.inputContainer,
+          { backgroundColor: colors.background, borderTopColor: colors.border },
+        ]}
+      >
         {isRecording ? (
           /* Recording UI - Professional design */
           <View style={styles.recordingWrapper}>
@@ -2362,9 +2398,14 @@ export default function ChatScreen() {
               )}
             </TouchableOpacity>
 
-            <View style={styles.inputWrapper}>
+            <View
+              style={[
+                styles.inputWrapper,
+                { backgroundColor: colors.inputBackground },
+              ]}
+            >
               <TextInput
-                style={styles.input}
+                style={[styles.input, { color: colors.text }]}
                 value={newMessage}
                 onChangeText={(text) => {
                   setNewMessage(text);
@@ -2545,6 +2586,7 @@ export default function ChatScreen() {
           <Animated.View
             style={[
               styles.menuContainer,
+              { backgroundColor: colors.card },
               {
                 transform: [
                   {
@@ -2558,13 +2600,26 @@ export default function ChatScreen() {
               },
             ]}
           >
-            <View style={styles.menuHandle} />
+            <View
+              style={[styles.menuHandle, { backgroundColor: colors.border }]}
+            />
 
             {selectedMessage && (
               <>
                 {/* Message Preview */}
-                <View style={styles.menuPreview}>
-                  <Text style={styles.menuPreviewText} numberOfLines={2}>
+                <View
+                  style={[
+                    styles.menuPreview,
+                    { backgroundColor: colors.inputBackground },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.menuPreviewText,
+                      { color: colors.textSecondary },
+                    ]}
+                    numberOfLines={2}
+                  >
                     {selectedMessage.content ||
                       (selectedMessage.media_type === "image"
                         ? "Фото"
@@ -2578,82 +2633,120 @@ export default function ChatScreen() {
                 <View style={styles.menuActions}>
                   {/* Ответить */}
                   <TouchableOpacity
-                    style={styles.menuActionItem}
+                    style={[
+                      styles.menuActionItem,
+                      { borderBottomColor: colors.border },
+                    ]}
                     onPress={() => handleMenuAction("reply")}
                     activeOpacity={0.7}
                   >
                     <View
                       style={[
                         styles.menuActionIcon,
-                        { backgroundColor: "#FF9500" },
+                        { backgroundColor: isDark ? "#4A6741" : "#E8F5E9" },
                       ]}
                     >
                       <Ionicons
                         name="arrow-undo-outline"
                         size={22}
-                        color="#fff"
+                        color={isDark ? "#A5D6A7" : "#43A047"}
                       />
                     </View>
-                    <Text style={styles.menuActionText}>Ответить</Text>
+                    <Text
+                      style={[styles.menuActionText, { color: colors.text }]}
+                    >
+                      Ответить
+                    </Text>
                   </TouchableOpacity>
 
                   {selectedMessage.content && (
                     <TouchableOpacity
-                      style={styles.menuActionItem}
+                      style={[
+                        styles.menuActionItem,
+                        { borderBottomColor: colors.border },
+                      ]}
                       onPress={() => handleMenuAction("copy")}
                       activeOpacity={0.7}
                     >
                       <View
                         style={[
                           styles.menuActionIcon,
-                          { backgroundColor: "#6C7BFF" },
+                          { backgroundColor: isDark ? "#3D5A80" : "#E3F2FD" },
                         ]}
                       >
-                        <Ionicons name="copy-outline" size={22} color="#fff" />
+                        <Ionicons
+                          name="copy-outline"
+                          size={22}
+                          color={isDark ? "#90CAF9" : "#1976D2"}
+                        />
                       </View>
-                      <Text style={styles.menuActionText}>Копировать</Text>
+                      <Text
+                        style={[styles.menuActionText, { color: colors.text }]}
+                      >
+                        Копировать
+                      </Text>
                     </TouchableOpacity>
                   )}
 
                   {selectedMessage.sender_id === user?.id &&
                     selectedMessage.content && (
                       <TouchableOpacity
-                        style={styles.menuActionItem}
+                        style={[
+                          styles.menuActionItem,
+                          { borderBottomColor: colors.border },
+                        ]}
                         onPress={() => handleMenuAction("edit")}
                         activeOpacity={0.7}
                       >
                         <View
                           style={[
                             styles.menuActionIcon,
-                            { backgroundColor: "#4CAF50" },
+                            { backgroundColor: isDark ? "#5D4E6D" : "#F3E5F5" },
                           ]}
                         >
                           <Ionicons
                             name="pencil-outline"
                             size={22}
-                            color="#fff"
+                            color={isDark ? "#CE93D8" : "#8E24AA"}
                           />
                         </View>
-                        <Text style={styles.menuActionText}>Редактировать</Text>
+                        <Text
+                          style={[
+                            styles.menuActionText,
+                            { color: colors.text },
+                          ]}
+                        >
+                          Редактировать
+                        </Text>
                       </TouchableOpacity>
                     )}
 
                   {selectedMessage.sender_id === user?.id && (
                     <TouchableOpacity
-                      style={styles.menuActionItem}
+                      style={[
+                        styles.menuActionItem,
+                        { borderBottomColor: colors.border },
+                      ]}
                       onPress={() => handleMenuAction("delete")}
                       activeOpacity={0.7}
                     >
                       <View
                         style={[
                           styles.menuActionIcon,
-                          { backgroundColor: colors.error },
+                          { backgroundColor: isDark ? "#5D3A3A" : "#FFEBEE" },
                         ]}
                       >
-                        <Ionicons name="trash-outline" size={22} color="#fff" />
+                        <Ionicons
+                          name="trash-outline"
+                          size={22}
+                          color={isDark ? "#EF9A9A" : "#E53935"}
+                        />
                       </View>
                       <Text
-                        style={[styles.menuActionText, { color: colors.error }]}
+                        style={[
+                          styles.menuActionText,
+                          { color: isDark ? "#EF9A9A" : "#E53935" },
+                        ]}
                       >
                         Удалить
                       </Text>
@@ -2662,7 +2755,10 @@ export default function ChatScreen() {
 
                   {/* Закрепить/Открепить */}
                   <TouchableOpacity
-                    style={styles.menuActionItem}
+                    style={[
+                      styles.menuActionItem,
+                      { borderBottomColor: colors.border },
+                    ]}
                     onPress={() => handleMenuAction("pin")}
                     activeOpacity={0.7}
                   >
@@ -2673,8 +2769,12 @@ export default function ChatScreen() {
                           backgroundColor: pinnedMessages.some(
                             (p) => p.message.id === selectedMessage.id,
                           )
-                            ? "#FF9500"
-                            : "#007AFF",
+                            ? isDark
+                              ? "#6D5D3B"
+                              : "#FFF3E0"
+                            : isDark
+                              ? "#3D5A80"
+                              : "#E3F2FD",
                         },
                       ]}
                     >
@@ -2687,10 +2787,22 @@ export default function ChatScreen() {
                             : "bookmark-outline"
                         }
                         size={22}
-                        color="#fff"
+                        color={
+                          pinnedMessages.some(
+                            (p) => p.message.id === selectedMessage.id,
+                          )
+                            ? isDark
+                              ? "#FFB74D"
+                              : "#F57C00"
+                            : isDark
+                              ? "#90CAF9"
+                              : "#1976D2"
+                        }
                       />
                     </View>
-                    <Text style={styles.menuActionText}>
+                    <Text
+                      style={[styles.menuActionText, { color: colors.text }]}
+                    >
                       {pinnedMessages.some(
                         (p) => p.message.id === selectedMessage.id,
                       )
@@ -2702,11 +2814,18 @@ export default function ChatScreen() {
 
                 {/* Cancel Button */}
                 <TouchableOpacity
-                  style={styles.menuCancelButton}
+                  style={[
+                    styles.menuCancelButton,
+                    { backgroundColor: colors.inputBackground },
+                  ]}
                   onPress={closeMessageMenu}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.menuCancelText}>Отмена</Text>
+                  <Text
+                    style={[styles.menuCancelText, { color: colors.primary }]}
+                  >
+                    Отмена
+                  </Text>
                 </TouchableOpacity>
               </>
             )}
@@ -2931,13 +3050,11 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#e5ddd5",
   },
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: colors.background,
   },
   header: {
     flexDirection: "row",
@@ -2945,7 +3062,6 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingBottom: 12,
     paddingHorizontal: 16,
-    backgroundColor: colors.primary,
   },
   backButton: {
     width: 40,
@@ -2984,10 +3100,9 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     backgroundColor: "#4CAF50",
     borderWidth: 2,
-    borderColor: colors.primary,
   },
   headerAvatarText: {
-    color: colors.textLight,
+    color: "#fff",
     fontSize: 18,
     fontWeight: "600",
   },
@@ -2997,7 +3112,7 @@ const styles = StyleSheet.create({
   headerName: {
     fontSize: 18,
     fontWeight: "600",
-    color: colors.textLight,
+    color: "#fff",
   },
   headerStatus: {
     fontSize: 13,
@@ -3032,7 +3147,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 12,
     fontSize: 13,
-    color: colors.textSecondary,
   },
   messageContainer: {
     marginBottom: 4,
@@ -3050,11 +3164,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
   },
   myMessageBubble: {
-    backgroundColor: colors.messageMine,
     borderBottomRightRadius: 4,
   },
   otherMessageBubble: {
-    backgroundColor: colors.messageOther,
     borderBottomLeftRadius: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
@@ -3071,23 +3183,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
   },
-  myMessageText: {
-    color: colors.textPrimary,
-  },
-  otherMessageText: {
-    color: colors.textPrimary,
-  },
+  myMessageText: {},
+  otherMessageText: {},
   messageTime: {
     fontSize: 11,
     marginTop: 4,
     alignSelf: "flex-end",
   },
-  myMessageTime: {
-    color: colors.messageTime,
-  },
-  otherMessageTime: {
-    color: colors.messageTime,
-  },
+  myMessageTime: {},
+  otherMessageTime: {},
   emptyContainer: {
     flex: 1,
     justifyContent: "center",
@@ -3106,19 +3210,17 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 18,
     fontWeight: "600",
-    color: colors.textPrimary,
   },
   emptySubtext: {
     fontSize: 14,
-    color: colors.textSecondary,
     marginTop: 4,
   },
   inputContainer: {
     flexDirection: "row",
     padding: 8,
     paddingBottom: 24,
-    backgroundColor: colors.background,
     alignItems: "flex-end",
+    borderTopWidth: 1,
   },
   attachButton: {
     width: 44,
@@ -3129,10 +3231,9 @@ const styles = StyleSheet.create({
   },
   inputWrapper: {
     flex: 1,
-    backgroundColor: colors.background,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "transparent",
     paddingHorizontal: 16,
     paddingVertical: 8,
     marginRight: 8,
@@ -3140,24 +3241,20 @@ const styles = StyleSheet.create({
   input: {
     fontSize: 16,
     maxHeight: 100,
-    color: colors.textPrimary,
   },
   sendButton: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
   },
-  sendButtonDisabled: {
-    backgroundColor: colors.textMuted,
-  },
+  sendButtonDisabled: {},
   editSendButton: {
     backgroundColor: "#4CAF50",
   },
   sendIcon: {
-    color: colors.textLight,
+    color: "#fff",
     fontSize: 20,
   },
   // Media styles
@@ -3195,7 +3292,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 10,
@@ -3210,13 +3306,11 @@ const styles = StyleSheet.create({
   audioWaveBar: {
     width: 3,
     borderRadius: 1.5,
-    backgroundColor: colors.textMuted,
   },
   myAudioWaveBar: {
     backgroundColor: "rgba(255,255,255,0.6)",
   },
   otherAudioWaveBar: {
-    backgroundColor: colors.primary,
     opacity: 0.5,
   },
   audioWaveBarActive: {
@@ -3229,23 +3323,18 @@ const styles = StyleSheet.create({
   myAudioDuration: {
     color: "rgba(255,255,255,0.8)",
   },
-  otherAudioDuration: {
-    color: colors.textSecondary,
-  },
+  otherAudioDuration: {},
   audioText: {
     marginLeft: 10,
     fontSize: 14,
-    color: colors.textPrimary,
   },
   // Attach menu styles
   attachMenu: {
     flexDirection: "row",
     justifyContent: "space-around",
-    backgroundColor: colors.background,
     paddingVertical: 16,
     paddingHorizontal: 20,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
   },
   attachMenuItem: {
     alignItems: "center",
@@ -3260,7 +3349,6 @@ const styles = StyleSheet.create({
   },
   attachMenuText: {
     fontSize: 12,
-    color: colors.textSecondary,
   },
   // Recording styles
   recordingIndicator: {
@@ -3274,19 +3362,17 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: colors.error,
+    backgroundColor: "#ff3b30",
     marginRight: 10,
   },
   recordingText: {
     fontSize: 18,
     fontWeight: "600",
-    color: colors.textPrimary,
   },
   cancelRecordingButton: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: colors.inputBackground,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -3294,7 +3380,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: colors.error,
+    backgroundColor: "#ff3b30",
     justifyContent: "center",
     alignItems: "center",
   },
@@ -3302,13 +3388,10 @@ const styles = StyleSheet.create({
   editingContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.background,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
     borderLeftWidth: 3,
-    borderLeftColor: colors.primary,
   },
   editingInfo: {
     flex: 1,
@@ -3318,21 +3401,18 @@ const styles = StyleSheet.create({
   editingLabel: {
     fontSize: 14,
     fontWeight: "600",
-    color: colors.primary,
     marginLeft: 8,
     marginRight: 8,
   },
   editingText: {
     flex: 1,
     fontSize: 14,
-    color: colors.textSecondary,
   },
   editingCancel: {
     padding: 4,
   },
   editedLabel: {
     fontSize: 11,
-    color: colors.textMuted,
     fontStyle: "italic",
     marginTop: 2,
   },
@@ -3340,11 +3420,9 @@ const styles = StyleSheet.create({
   replyContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.background,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
   },
   replyInfo: {
     flex: 1,
@@ -3360,7 +3438,6 @@ const styles = StyleSheet.create({
   },
   replyText: {
     fontSize: 13,
-    color: colors.textSecondary,
   },
   replyCancel: {
     padding: 4,
@@ -3385,7 +3462,6 @@ const styles = StyleSheet.create({
   },
   repliedMessageText: {
     fontSize: 12,
-    color: colors.textSecondary,
   },
   repliedMessageTextMy: {
     color: "rgba(255, 255, 255, 0.8)",
@@ -3397,7 +3473,6 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   menuContainer: {
-    backgroundColor: colors.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingBottom: 34,
@@ -3406,7 +3481,6 @@ const styles = StyleSheet.create({
   menuHandle: {
     width: 36,
     height: 4,
-    backgroundColor: colors.border,
     borderRadius: 2,
     alignSelf: "center",
     marginBottom: 16,
@@ -3416,12 +3490,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginHorizontal: 16,
     marginBottom: 12,
-    backgroundColor: colors.inputBackground,
     borderRadius: 12,
   },
   menuPreviewText: {
     fontSize: 14,
-    color: colors.textSecondary,
   },
   menuActions: {
     paddingHorizontal: 16,
@@ -3432,7 +3504,6 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 4,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   menuActionIcon: {
     width: 40,
@@ -3444,20 +3515,17 @@ const styles = StyleSheet.create({
   },
   menuActionText: {
     fontSize: 16,
-    color: colors.textPrimary,
     fontWeight: "500",
   },
   menuCancelButton: {
     marginTop: 12,
     marginHorizontal: 16,
     paddingVertical: 14,
-    backgroundColor: colors.inputBackground,
     borderRadius: 12,
     alignItems: "center",
   },
   menuCancelText: {
     fontSize: 16,
-    color: colors.primary,
     fontWeight: "600",
   },
   // Hold-to-record & Media picker styles
@@ -3472,7 +3540,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -3480,7 +3547,6 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.inputBackground,
     borderRadius: 20,
     paddingHorizontal: 16,
     paddingVertical: 12,
@@ -3488,13 +3554,11 @@ const styles = StyleSheet.create({
   },
   recordingTime: {
     fontSize: 16,
-    color: colors.textPrimary,
     fontWeight: "500",
     marginRight: 12,
   },
   recordingHint: {
     fontSize: 13,
-    color: colors.textMuted,
     flex: 1,
   },
   mediaPickerOverlay: {
@@ -3503,7 +3567,6 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   mediaPickerContainer: {
-    backgroundColor: colors.background,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingBottom: 40,
@@ -3512,7 +3575,6 @@ const styles = StyleSheet.create({
   mediaPickerHandle: {
     width: 40,
     height: 4,
-    backgroundColor: colors.border,
     borderRadius: 2,
     alignSelf: "center",
     marginBottom: 20,
@@ -3520,7 +3582,6 @@ const styles = StyleSheet.create({
   mediaPickerTitle: {
     fontSize: 18,
     fontWeight: "600",
-    color: colors.textPrimary,
     textAlign: "center",
     marginBottom: 24,
   },
@@ -3545,19 +3606,16 @@ const styles = StyleSheet.create({
   },
   mediaPickerLabel: {
     fontSize: 12,
-    color: colors.textSecondary,
   },
   mediaPickerCancel: {
     marginHorizontal: 20,
     paddingVertical: 14,
-    backgroundColor: colors.inputBackground,
     borderRadius: 12,
     alignItems: "center",
     marginTop: 8,
   },
   mediaPickerCancelText: {
     fontSize: 16,
-    color: colors.primary,
     fontWeight: "600",
   },
   // Recording wrapper for better UI
@@ -3571,7 +3629,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -3636,7 +3693,7 @@ const styles = StyleSheet.create({
   avatarViewerPlaceholderText: {
     fontSize: 72,
     fontWeight: "700",
-    color: colors.textLight,
+    color: "#fff",
   },
   avatarViewerInfo: {
     marginTop: 24,
@@ -3688,27 +3745,23 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 12,
     borderWidth: 2,
-    borderColor: colors.background,
   },
   typingAvatarPlaceholder: {
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 2,
-    borderColor: colors.background,
   },
   typingAvatarText: {
     fontSize: 10,
     fontWeight: "600",
-    color: colors.textLight,
+    color: "#fff",
   },
   typingBubble: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.surface,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 16,
@@ -3723,22 +3776,18 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: colors.textSecondary,
   },
   typingText: {
     fontSize: 13,
-    color: colors.textSecondary,
     marginLeft: 4,
   },
   // Pinned message styles
   pinnedBar: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.surface,
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -3756,7 +3805,6 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: colors.primaryLight,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -3766,12 +3814,10 @@ const styles = StyleSheet.create({
   pinnedLabel: {
     fontSize: 12,
     fontWeight: "600",
-    color: colors.primary,
     marginBottom: 2,
   },
   pinnedMessageText: {
     fontSize: 14,
-    color: colors.text,
   },
   pinnedAvatar: {
     width: 32,
@@ -3788,13 +3834,12 @@ const styles = StyleSheet.create({
   pinnedAvatarText: {
     fontSize: 14,
     fontWeight: "600",
-    color: colors.textLight,
+    color: "#fff",
   },
   pinnedCloseButton: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: colors.border,
     justifyContent: "center",
     alignItems: "center",
     marginLeft: 8,
@@ -3810,7 +3855,6 @@ const styles = StyleSheet.create({
   pinnedCounter: {
     fontSize: 11,
     fontWeight: "600",
-    color: colors.primary,
     marginVertical: 2,
   },
   pinnedIconPersonal: {
@@ -3818,7 +3862,6 @@ const styles = StyleSheet.create({
   },
   // Pin options modal styles
   pinOptionsContainer: {
-    backgroundColor: colors.surface,
     borderRadius: 20,
     padding: 20,
     marginHorizontal: 24,
@@ -3838,18 +3881,15 @@ const styles = StyleSheet.create({
   pinOptionsTitle: {
     fontSize: 20,
     fontWeight: "700",
-    color: colors.text,
   },
   pinOptionsDescription: {
     fontSize: 14,
-    color: colors.textSecondary,
     textAlign: "center",
     marginBottom: 20,
   },
   pinOptionButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.background,
     borderRadius: 14,
     padding: 14,
     marginBottom: 12,
@@ -3868,12 +3908,10 @@ const styles = StyleSheet.create({
   pinOptionTitle: {
     fontSize: 16,
     fontWeight: "600",
-    color: colors.text,
     marginBottom: 3,
   },
   pinOptionSubtitle: {
     fontSize: 13,
-    color: colors.textSecondary,
   },
   pinOptionCancelButton: {
     alignItems: "center",
@@ -3883,7 +3921,6 @@ const styles = StyleSheet.create({
   pinOptionCancelText: {
     fontSize: 17,
     fontWeight: "600",
-    color: colors.primary,
   },
   // Search styles
   headerSearchButton: {
@@ -3896,7 +3933,6 @@ const styles = StyleSheet.create({
   searchBar: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.primary,
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 10,
@@ -3905,7 +3941,6 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.surface,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -3914,7 +3949,6 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: colors.text,
     paddingVertical: 0,
   },
   searchNavigation: {
@@ -3925,7 +3959,7 @@ const styles = StyleSheet.create({
   searchResultsCount: {
     fontSize: 13,
     fontWeight: "600",
-    color: colors.textLight,
+    color: "#fff",
     marginRight: 4,
   },
   searchNavButton: {

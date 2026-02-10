@@ -1,7 +1,7 @@
 import {
     DarkTheme,
     DefaultTheme,
-    ThemeProvider,
+    ThemeProvider as NavigationThemeProvider,
 } from "@react-navigation/native";
 import * as Notifications from "expo-notifications";
 import { Stack, useRouter } from "expo-router";
@@ -11,7 +11,7 @@ import { ActivityIndicator, View } from "react-native";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/contexts/auth-context";
-import { useColorScheme } from "@/hooks/use-color-scheme";
+import { ThemeProvider, useTheme } from "@/contexts/theme-context";
 import { usePresence } from "@/hooks/use-presence";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
 import AuthScreen from "./auth";
@@ -21,7 +21,7 @@ export const unstable_settings = {
 };
 
 function RootLayoutNav() {
-  const colorScheme = useColorScheme();
+  const { isDark, colors } = useTheme();
   const { session, loading, user } = useAuth();
   const router = useRouter();
 
@@ -56,8 +56,15 @@ function RootLayoutNav() {
   if (loading) {
     console.log("Showing loading spinner");
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" color="#007AFF" />
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: colors.background,
+        }}
+      >
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -70,12 +77,13 @@ function RootLayoutNav() {
 
   console.log("Session exists, showing main app");
   return (
-    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+    <NavigationThemeProvider value={isDark ? DarkTheme : DefaultTheme}>
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="chat/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="search" options={{ headerShown: false }} />
+        <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen
           name="new-chat"
           options={{ presentation: "modal", title: "Новый чат" }}
@@ -85,15 +93,17 @@ function RootLayoutNav() {
           options={{ presentation: "modal", title: "Modal" }}
         />
       </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+      <StatusBar style={isDark ? "light" : "dark"} />
+    </NavigationThemeProvider>
   );
 }
 
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <RootLayoutNav />
+      <ThemeProvider>
+        <RootLayoutNav />
+      </ThemeProvider>
     </AuthProvider>
   );
 }

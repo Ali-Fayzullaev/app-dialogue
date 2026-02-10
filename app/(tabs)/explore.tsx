@@ -1,5 +1,6 @@
-import { colors, getAvatarColor } from "@/constants/colors";
+import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { sendLocalNotification } from "@/hooks/use-push-notifications";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
@@ -8,6 +9,7 @@ import * as Device from "expo-device";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
+import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
@@ -36,6 +38,8 @@ const safeNotificationHaptic = (type: Haptics.NotificationFeedbackType) => {
 
 export default function ProfileScreen() {
   const { user, profile, signOut, refreshProfile } = useAuth();
+  const { colors } = useTheme();
+  const router = useRouter();
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   const handlePickAvatar = async () => {
@@ -130,9 +134,17 @@ export default function ProfileScreen() {
     : "-";
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={[
+        styles.container,
+        { backgroundColor: colors.backgroundSecondary },
+      ]}
+      showsVerticalScrollIndicator={false}
+    >
       {/* Header with gradient-like effect */}
-      <View style={styles.headerBackground}>
+      <View
+        style={[styles.headerBackground, { backgroundColor: colors.primary }]}
+      >
         <View style={styles.headerContent}>
           <TouchableOpacity
             style={styles.avatarContainer}
@@ -179,7 +191,7 @@ export default function ProfileScreen() {
       </View>
 
       {/* Account Info Card */}
-      <View style={styles.card}>
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
         <View style={styles.cardHeader}>
           <Ionicons
             name="person-outline"
@@ -187,35 +199,60 @@ export default function ProfileScreen() {
             color={colors.textPrimary}
             style={{ marginRight: 8 }}
           />
-          <Text style={styles.cardTitle}>Аккаунт</Text>
+          <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>
+            Аккаунт
+          </Text>
         </View>
 
         <View style={styles.infoRow}>
-          <View style={styles.infoIconContainer}>
+          <View
+            style={[
+              styles.infoIconContainer,
+              { backgroundColor: colors.primaryLight },
+            ]}
+          >
             <Ionicons name="at" size={16} color={colors.primary} />
           </View>
           <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Имя пользователя</Text>
-            <Text style={styles.infoValue}>{profile?.username || "-"}</Text>
+            <Text style={[styles.infoLabel, { color: colors.textMuted }]}>
+              Имя пользователя
+            </Text>
+            <Text style={[styles.infoValue, { color: colors.textPrimary }]}>
+              {profile?.username || "-"}
+            </Text>
           </View>
         </View>
 
-        <View style={styles.divider} />
+        <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
         <View style={styles.infoRow}>
-          <View style={styles.infoIconContainer}>
+          <View
+            style={[
+              styles.infoIconContainer,
+              { backgroundColor: colors.primaryLight },
+            ]}
+          >
             <Ionicons name="mail-outline" size={16} color={colors.primary} />
           </View>
           <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Email</Text>
-            <Text style={styles.infoValue}>{user?.email || "-"}</Text>
+            <Text style={[styles.infoLabel, { color: colors.textMuted }]}>
+              Email
+            </Text>
+            <Text style={[styles.infoValue, { color: colors.textPrimary }]}>
+              {user?.email || "-"}
+            </Text>
           </View>
         </View>
 
-        <View style={styles.divider} />
+        <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
         <View style={styles.infoRow}>
-          <View style={styles.infoIconContainer}>
+          <View
+            style={[
+              styles.infoIconContainer,
+              { backgroundColor: colors.primaryLight },
+            ]}
+          >
             <Ionicons
               name="calendar-outline"
               size={16}
@@ -223,14 +260,18 @@ export default function ProfileScreen() {
             />
           </View>
           <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Дата регистрации</Text>
-            <Text style={styles.infoValue}>{memberSince}</Text>
+            <Text style={[styles.infoLabel, { color: colors.textMuted }]}>
+              Дата регистрации
+            </Text>
+            <Text style={[styles.infoValue, { color: colors.textPrimary }]}>
+              {memberSince}
+            </Text>
           </View>
         </View>
       </View>
 
       {/* Settings Card */}
-      <View style={styles.card}>
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
         <View style={styles.cardHeader}>
           <Ionicons
             name="settings-outline"
@@ -238,8 +279,40 @@ export default function ProfileScreen() {
             color={colors.textPrimary}
             style={{ marginRight: 8 }}
           />
-          <Text style={styles.cardTitle}>Настройки</Text>
+          <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>
+            Настройки
+          </Text>
         </View>
+
+        <TouchableOpacity
+          style={styles.menuItem}
+          activeOpacity={0.6}
+          onPress={() => {
+            safeHaptic();
+            router.push("/settings");
+          }}
+        >
+          <View style={styles.menuItemLeft}>
+            <View
+              style={[
+                styles.menuIcon,
+                { backgroundColor: colors.primary + "20" },
+              ]}
+            >
+              <Ionicons
+                name="color-palette-outline"
+                size={18}
+                color={colors.primary}
+              />
+            </View>
+            <Text style={[styles.menuItemText, { color: colors.textPrimary }]}>
+              Тема и цвета
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+        </TouchableOpacity>
+
+        <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
         <TouchableOpacity
           style={styles.menuItem}
@@ -269,12 +342,14 @@ export default function ProfileScreen() {
                 color="#FF6B6B"
               />
             </View>
-            <Text style={styles.menuItemText}>Тест уведомлений</Text>
+            <Text style={[styles.menuItemText, { color: colors.textPrimary }]}>
+              Тест уведомлений
+            </Text>
           </View>
           <Ionicons name="send" size={18} color={colors.primary} />
         </TouchableOpacity>
 
-        <View style={styles.divider} />
+        <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
         <TouchableOpacity
           style={styles.menuItem}
@@ -285,12 +360,14 @@ export default function ProfileScreen() {
             <View style={[styles.menuIcon, { backgroundColor: "#4ECDC420" }]}>
               <Ionicons name="lock-closed-outline" size={18} color="#4ECDC4" />
             </View>
-            <Text style={styles.menuItemText}>Конфиденциальность</Text>
+            <Text style={[styles.menuItemText, { color: colors.textPrimary }]}>
+              Конфиденциальность
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
         </TouchableOpacity>
 
-        <View style={styles.divider} />
+        <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
         <TouchableOpacity
           style={styles.menuItem}
@@ -301,7 +378,9 @@ export default function ProfileScreen() {
             <View style={[styles.menuIcon, { backgroundColor: "#45B7D120" }]}>
               <Ionicons name="help-circle-outline" size={18} color="#45B7D1" />
             </View>
-            <Text style={styles.menuItemText}>Помощь</Text>
+            <Text style={[styles.menuItemText, { color: colors.textPrimary }]}>
+              Помощь
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
         </TouchableOpacity>
@@ -309,7 +388,10 @@ export default function ProfileScreen() {
 
       {/* Sign Out Button */}
       <TouchableOpacity
-        style={styles.signOutButton}
+        style={[
+          styles.signOutButton,
+          { backgroundColor: colors.card, borderColor: colors.danger },
+        ]}
         onPress={() => {
           safeNotificationHaptic(Haptics.NotificationFeedbackType.Warning);
           handleSignOut();
@@ -322,10 +404,14 @@ export default function ProfileScreen() {
           color={colors.danger}
           style={{ marginRight: 8 }}
         />
-        <Text style={styles.signOutText}>Выйти из аккаунта</Text>
+        <Text style={[styles.signOutText, { color: colors.danger }]}>
+          Выйти из аккаунта
+        </Text>
       </TouchableOpacity>
 
-      <Text style={styles.version}>Messenger v1.0.0</Text>
+      <Text style={[styles.version, { color: colors.textMuted }]}>
+        Messenger v1.0.0
+      </Text>
     </ScrollView>
   );
 }
@@ -333,10 +419,8 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.backgroundSecondary,
   },
   headerBackground: {
-    backgroundColor: colors.primary,
     paddingTop: 60,
     paddingBottom: 40,
     borderBottomLeftRadius: 32,
@@ -379,14 +463,14 @@ const styles = StyleSheet.create({
     borderColor: "#fff",
   },
   avatarText: {
-    color: colors.textLight,
+    color: "#fff",
     fontSize: 40,
     fontWeight: "600",
   },
   username: {
     fontSize: 26,
     fontWeight: "bold",
-    color: colors.textLight,
+    color: "#fff",
     marginBottom: 8,
   },
   emailContainer: {
@@ -402,7 +486,6 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.9)",
   },
   card: {
-    backgroundColor: colors.background,
     marginHorizontal: 16,
     marginTop: 20,
     borderRadius: 16,
@@ -421,7 +504,6 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 18,
     fontWeight: "600",
-    color: colors.textPrimary,
   },
   infoRow: {
     flexDirection: "row",
@@ -432,7 +514,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: colors.primaryLight,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -442,17 +523,14 @@ const styles = StyleSheet.create({
   },
   infoLabel: {
     fontSize: 12,
-    color: colors.textMuted,
     marginBottom: 2,
   },
   infoValue: {
     fontSize: 15,
-    color: colors.textPrimary,
     fontWeight: "500",
   },
   divider: {
     height: 1,
-    backgroundColor: colors.border,
     marginVertical: 8,
     marginLeft: 48,
   },
@@ -476,32 +554,26 @@ const styles = StyleSheet.create({
   },
   menuItemText: {
     fontSize: 15,
-    color: colors.textPrimary,
   },
   menuItemArrow: {
     fontSize: 22,
-    color: colors.textMuted,
   },
   signOutButton: {
     flexDirection: "row",
     marginTop: 24,
     marginHorizontal: 16,
-    backgroundColor: colors.background,
     borderRadius: 16,
     paddingVertical: 16,
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 1.5,
-    borderColor: colors.danger,
   },
   signOutText: {
-    color: colors.danger,
     fontSize: 16,
     fontWeight: "600",
   },
   version: {
     textAlign: "center",
-    color: colors.textMuted,
     fontSize: 12,
     marginTop: 24,
     marginBottom: 40,

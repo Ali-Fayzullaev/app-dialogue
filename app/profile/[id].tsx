@@ -1,5 +1,6 @@
-import { colors, getAvatarColor } from "@/constants/colors";
+import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { supabase } from "@/lib/supabase";
 import { Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
@@ -48,6 +49,7 @@ type MediaTab = "media" | "audio";
 export default function UserProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
+  const { colors } = useTheme();
   const router = useRouter();
 
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -356,7 +358,12 @@ export default function UserProfileScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View
+        style={[
+          styles.loadingContainer,
+          { backgroundColor: colors.background },
+        ]}
+      >
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
@@ -364,11 +371,15 @@ export default function UserProfileScreen() {
 
   if (!profile) {
     return (
-      <View style={styles.errorContainer}>
+      <View
+        style={[styles.errorContainer, { backgroundColor: colors.background }]}
+      >
         <Ionicons name="person-outline" size={64} color={colors.textMuted} />
-        <Text style={styles.errorText}>Пользователь не найден</Text>
+        <Text style={[styles.errorText, { color: colors.textSecondary }]}>
+          Пользователь не найден
+        </Text>
         <TouchableOpacity
-          style={styles.backButtonLarge}
+          style={[styles.backButtonLarge, { backgroundColor: colors.primary }]}
           onPress={() => router.back()}
         >
           <Text style={styles.backButtonText}>Назад</Text>
@@ -424,7 +435,15 @@ export default function UserProfileScreen() {
 
     return (
       <Pressable
-        style={[styles.audioItem, isPlaying && styles.audioItemPlaying]}
+        style={[
+          styles.audioItem,
+          { backgroundColor: colors.card },
+          isPlaying && {
+            backgroundColor: colors.primaryLight,
+            borderWidth: 1,
+            borderColor: colors.primary,
+          },
+        ]}
         onPress={() => playAudio(item)}
         onLongPress={() => {
           safeHaptic();
@@ -433,7 +452,11 @@ export default function UserProfileScreen() {
         delayLongPress={300}
       >
         <TouchableOpacity
-          style={[styles.audioPlayBtn, isPlaying && styles.audioPlayBtnActive]}
+          style={[
+            styles.audioPlayBtn,
+            { backgroundColor: colors.primary },
+            isPlaying && styles.audioPlayBtnActive,
+          ]}
           onPress={() => playAudio(item)}
           activeOpacity={0.7}
         >
@@ -464,14 +487,16 @@ export default function UserProfileScreen() {
             ))}
           </View>
           <View style={styles.audioMeta}>
-            <Text style={styles.audioTime}>
+            <Text style={[styles.audioTime, { color: colors.textMuted }]}>
               {isPlaying && audioDuration > 0
                 ? formatDuration(audioProgress * audioDuration)
                 : formatDate(item.created_at)}
             </Text>
             {isOwn && (
               <View style={styles.ownLabel}>
-                <Text style={styles.ownLabelText}>Вы</Text>
+                <Text style={[styles.ownLabelText, { color: colors.primary }]}>
+                  Вы
+                </Text>
               </View>
             )}
           </View>
@@ -481,9 +506,9 @@ export default function UserProfileScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: colors.primary }]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => {
@@ -495,7 +520,7 @@ export default function UserProfileScreen() {
             }
           }}
         >
-          <Ionicons name="arrow-back" size={24} color={colors.textLight} />
+          <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Профиль</Text>
         <View style={styles.headerRight} />
@@ -503,7 +528,12 @@ export default function UserProfileScreen() {
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Profile Info */}
-        <View style={styles.profileSection}>
+        <View
+          style={[
+            styles.profileSection,
+            { backgroundColor: colors.background },
+          ]}
+        >
           <TouchableOpacity
             onPress={() => {
               safeHaptic();
@@ -525,44 +555,66 @@ export default function UserProfileScreen() {
             )}
           </TouchableOpacity>
 
-          <Text style={styles.username}>{profile.username}</Text>
+          <Text style={[styles.username, { color: colors.text }]}>
+            {profile.username}
+          </Text>
 
-          <Text style={styles.joinDate}>
+          <Text style={[styles.joinDate, { color: colors.textMuted }]}>
             В приложении с {formatDate(profile.created_at)}
           </Text>
         </View>
 
         {/* Stats */}
-        <View style={styles.statsContainer}>
+        <View style={[styles.statsContainer, { backgroundColor: colors.card }]}>
           <View style={styles.statItem}>
             <View style={[styles.statIcon, { backgroundColor: "#E3F2FD" }]}>
               <Ionicons name="image" size={20} color="#2196F3" />
             </View>
-            <Text style={styles.statValue}>{mediaCount.images}</Text>
-            <Text style={styles.statLabel}>Фото</Text>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {mediaCount.images}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.textMuted }]}>
+              Фото
+            </Text>
           </View>
 
           <View style={styles.statItem}>
             <View style={[styles.statIcon, { backgroundColor: "#FCE4EC" }]}>
               <Ionicons name="videocam" size={20} color="#E91E63" />
             </View>
-            <Text style={styles.statValue}>{mediaCount.videos}</Text>
-            <Text style={styles.statLabel}>Видео</Text>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {mediaCount.videos}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.textMuted }]}>
+              Видео
+            </Text>
           </View>
 
           <View style={styles.statItem}>
             <View style={[styles.statIcon, { backgroundColor: "#FFF3E0" }]}>
               <Ionicons name="mic" size={20} color="#FF9800" />
             </View>
-            <Text style={styles.statValue}>{mediaCount.audio}</Text>
-            <Text style={styles.statLabel}>Аудио</Text>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {mediaCount.audio}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.textMuted }]}>
+              Аудио
+            </Text>
           </View>
         </View>
 
         {/* Tabs */}
-        <View style={styles.tabsContainer}>
+        <View
+          style={[styles.tabsContainer, { borderBottomColor: colors.border }]}
+        >
           <TouchableOpacity
-            style={[styles.tab, activeTab === "media" && styles.activeTab]}
+            style={[
+              styles.tab,
+              activeTab === "media" && [
+                styles.activeTab,
+                { borderBottomColor: colors.primary },
+              ],
+            ]}
             onPress={() => setActiveTab("media")}
           >
             <Ionicons
@@ -573,7 +625,8 @@ export default function UserProfileScreen() {
             <Text
               style={[
                 styles.tabText,
-                activeTab === "media" && styles.activeTabText,
+                { color: colors.textMuted },
+                activeTab === "media" && { color: colors.primary },
               ]}
             >
               Медиа
@@ -581,7 +634,13 @@ export default function UserProfileScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.tab, activeTab === "audio" && styles.activeTab]}
+            style={[
+              styles.tab,
+              activeTab === "audio" && [
+                styles.activeTab,
+                { borderBottomColor: colors.primary },
+              ],
+            ]}
             onPress={() => setActiveTab("audio")}
           >
             <Ionicons
@@ -592,7 +651,8 @@ export default function UserProfileScreen() {
             <Text
               style={[
                 styles.tabText,
-                activeTab === "audio" && styles.activeTabText,
+                { color: colors.textMuted },
+                activeTab === "audio" && { color: colors.primary },
               ]}
             >
               Аудио
@@ -620,7 +680,9 @@ export default function UserProfileScreen() {
                 size={48}
                 color={colors.textMuted}
               />
-              <Text style={styles.emptyText}>Нет общих фото и видео</Text>
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+                Нет общих фото и видео
+              </Text>
             </View>
           )
         ) : audioItems.length > 0 ? (
@@ -639,7 +701,9 @@ export default function UserProfileScreen() {
               size={48}
               color={colors.textMuted}
             />
-            <Text style={styles.emptyText}>Нет голосовых сообщений</Text>
+            <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+              Нет голосовых сообщений
+            </Text>
           </View>
         )}
 
@@ -692,6 +756,7 @@ export default function UserProfileScreen() {
           <Animated.View
             style={[
               styles.actionsContainer,
+              { backgroundColor: colors.background },
               {
                 transform: [
                   {
@@ -705,9 +770,11 @@ export default function UserProfileScreen() {
               },
             ]}
           >
-            <View style={styles.actionsHandle} />
+            <View
+              style={[styles.actionsHandle, { backgroundColor: colors.border }]}
+            />
 
-            <Text style={styles.actionsTitle}>
+            <Text style={[styles.actionsTitle, { color: colors.text }]}>
               {selectedMedia?.type === "image"
                 ? "Фото"
                 : selectedMedia?.type === "video"
@@ -728,7 +795,7 @@ export default function UserProfileScreen() {
               {/* View full */}
               {selectedMedia?.type !== "audio" && (
                 <TouchableOpacity
-                  style={styles.actionItem}
+                  style={[styles.actionItem, { backgroundColor: colors.card }]}
                   onPress={() => {
                     closeMediaActions();
                     setTimeout(() => setFullscreenMedia(selectedMedia), 200);
@@ -742,14 +809,16 @@ export default function UserProfileScreen() {
                   >
                     <Ionicons name="expand" size={22} color={colors.primary} />
                   </View>
-                  <Text style={styles.actionText}>Открыть</Text>
+                  <Text style={[styles.actionText, { color: colors.text }]}>
+                    Открыть
+                  </Text>
                 </TouchableOpacity>
               )}
 
               {/* Play audio */}
               {selectedMedia?.type === "audio" && (
                 <TouchableOpacity
-                  style={styles.actionItem}
+                  style={[styles.actionItem, { backgroundColor: colors.card }]}
                   onPress={() => {
                     if (selectedMedia) {
                       playAudio(selectedMedia);
@@ -771,7 +840,7 @@ export default function UserProfileScreen() {
                       color={colors.primary}
                     />
                   </View>
-                  <Text style={styles.actionText}>
+                  <Text style={[styles.actionText, { color: colors.text }]}>
                     {playingAudioId === selectedMedia?.id
                       ? "Остановить"
                       : "Воспроизвести"}
@@ -782,19 +851,15 @@ export default function UserProfileScreen() {
               {/* Delete - only for own media */}
               {selectedMedia?.sender_id === user?.id && (
                 <TouchableOpacity
-                  style={styles.actionItem}
+                  style={[styles.actionItem, { backgroundColor: colors.card }]}
                   onPress={deleteMedia}
                 >
                   <View
                     style={[styles.actionIcon, { backgroundColor: "#FFEBEE" }]}
                   >
-                    <Ionicons
-                      name="trash-outline"
-                      size={22}
-                      color={colors.error}
-                    />
+                    <Ionicons name="trash-outline" size={22} color="#F44336" />
                   </View>
-                  <Text style={[styles.actionText, { color: colors.error }]}>
+                  <Text style={[styles.actionText, { color: "#F44336" }]}>
                     Удалить
                   </Text>
                 </TouchableOpacity>
@@ -807,13 +872,33 @@ export default function UserProfileScreen() {
                   size={14}
                   color={colors.textMuted}
                 />
-                <Text style={styles.actionInfoText}>
+                <Text
+                  style={[styles.actionInfoText, { color: colors.textMuted }]}
+                >
                   {selectedMedia ? formatDate(selectedMedia.created_at) : ""}
                 </Text>
                 {selectedMedia?.sender_id === user?.id ? (
-                  <Text style={styles.actionInfoBadge}>Ваше</Text>
+                  <Text
+                    style={[
+                      styles.actionInfoBadge,
+                      {
+                        color: colors.primary,
+                        backgroundColor: colors.primaryLight,
+                      },
+                    ]}
+                  >
+                    Ваше
+                  </Text>
                 ) : (
-                  <Text style={styles.actionInfoBadge}>
+                  <Text
+                    style={[
+                      styles.actionInfoBadge,
+                      {
+                        color: colors.primary,
+                        backgroundColor: colors.primaryLight,
+                      },
+                    ]}
+                  >
                     От {profile?.username}
                   </Text>
                 )}
@@ -821,10 +906,17 @@ export default function UserProfileScreen() {
             </View>
 
             <TouchableOpacity
-              style={styles.actionCancel}
+              style={[styles.actionCancel, { backgroundColor: colors.card }]}
               onPress={closeMediaActions}
             >
-              <Text style={styles.actionCancelText}>Отмена</Text>
+              <Text
+                style={[
+                  styles.actionCancelText,
+                  { color: colors.textSecondary },
+                ]}
+              >
+                Отмена
+              </Text>
             </TouchableOpacity>
           </Animated.View>
         </Pressable>
@@ -879,35 +971,30 @@ export default function UserProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: colors.background,
   },
   errorContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: colors.background,
     padding: 20,
   },
   errorText: {
     fontSize: 18,
-    color: colors.textSecondary,
     marginTop: 16,
     marginBottom: 24,
   },
   backButtonLarge: {
-    backgroundColor: colors.primary,
     paddingHorizontal: 32,
     paddingVertical: 12,
     borderRadius: 24,
   },
   backButtonText: {
-    color: colors.textLight,
+    color: "#fff",
     fontSize: 16,
     fontWeight: "600",
   },
@@ -918,7 +1005,6 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingBottom: 14,
     paddingHorizontal: 16,
-    backgroundColor: colors.primary,
   },
   backButton: {
     width: 40,
@@ -929,7 +1015,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: "600",
-    color: colors.textLight,
+    color: "#fff",
   },
   headerRight: {
     width: 40,
@@ -940,7 +1026,6 @@ const styles = StyleSheet.create({
   profileSection: {
     alignItems: "center",
     paddingVertical: 32,
-    backgroundColor: colors.background,
   },
   avatar: {
     width: 120,
@@ -953,24 +1038,21 @@ const styles = StyleSheet.create({
   avatarText: {
     fontSize: 48,
     fontWeight: "600",
-    color: colors.textLight,
+    color: "#fff",
   },
   username: {
     fontSize: 28,
     fontWeight: "bold",
-    color: colors.textPrimary,
     marginBottom: 8,
   },
   joinDate: {
     fontSize: 14,
-    color: colors.textMuted,
   },
   statsContainer: {
     flexDirection: "row",
     justifyContent: "space-around",
     paddingVertical: 20,
     paddingHorizontal: 16,
-    backgroundColor: colors.backgroundSecondary,
     marginHorizontal: 16,
     borderRadius: 16,
     marginBottom: 20,
@@ -989,17 +1071,14 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 20,
     fontWeight: "bold",
-    color: colors.textPrimary,
   },
   statLabel: {
     fontSize: 12,
-    color: colors.textMuted,
     marginTop: 2,
   },
   tabsContainer: {
     flexDirection: "row",
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
     marginHorizontal: 16,
   },
   tab: {
@@ -1012,16 +1091,12 @@ const styles = StyleSheet.create({
   },
   activeTab: {
     borderBottomWidth: 2,
-    borderBottomColor: colors.primary,
   },
   tabText: {
     fontSize: 14,
-    color: colors.textMuted,
     fontWeight: "500",
   },
-  activeTabText: {
-    color: colors.primary,
-  },
+  activeTabText: {},
   mediaGrid: {
     paddingHorizontal: 2,
     paddingTop: 2,
@@ -1037,7 +1112,6 @@ const styles = StyleSheet.create({
   mediaThumbnail: {
     width: "100%",
     height: "100%",
-    backgroundColor: colors.border,
   },
   videoOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1052,7 +1126,6 @@ const styles = StyleSheet.create({
   audioItem: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.backgroundSecondary,
     padding: 14,
     borderRadius: 12,
     marginBottom: 8,
@@ -1061,7 +1134,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: colors.primaryLight,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -1072,11 +1144,9 @@ const styles = StyleSheet.create({
   audioTitle: {
     fontSize: 15,
     fontWeight: "500",
-    color: colors.textPrimary,
   },
   audioDate: {
     fontSize: 12,
-    color: colors.textMuted,
     marginTop: 2,
   },
   emptyState: {
@@ -1085,7 +1155,6 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 15,
-    color: colors.textMuted,
     marginTop: 12,
   },
   fullscreenOverlay: {
@@ -1119,27 +1188,22 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 4,
     right: 4,
-    backgroundColor: colors.primary,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
+    backgroundColor: "#007AFF",
   },
   ownBadgeText: {
     fontSize: 9,
-    color: colors.textLight,
+    color: "#fff",
     fontWeight: "600",
   },
   // Audio player styles
-  audioItemPlaying: {
-    backgroundColor: colors.primaryLight,
-    borderWidth: 1,
-    borderColor: colors.primary,
-  },
+  audioItemPlaying: {},
   audioPlayBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -1160,7 +1224,6 @@ const styles = StyleSheet.create({
   audioBar: {
     width: 3,
     borderRadius: 1.5,
-    backgroundColor: colors.border,
   },
   audioMeta: {
     flexDirection: "row",
@@ -1169,7 +1232,6 @@ const styles = StyleSheet.create({
   },
   audioTime: {
     fontSize: 12,
-    color: colors.textMuted,
     fontWeight: "500",
   },
   ownLabel: {
@@ -1179,7 +1241,6 @@ const styles = StyleSheet.create({
   },
   ownLabelText: {
     fontSize: 11,
-    color: colors.primary,
     fontWeight: "500",
   },
   // Actions modal styles
@@ -1189,7 +1250,6 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   actionsContainer: {
-    backgroundColor: colors.background,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingBottom: 34,
@@ -1200,7 +1260,6 @@ const styles = StyleSheet.create({
   actionsHandle: {
     width: 40,
     height: 4,
-    backgroundColor: colors.border,
     borderRadius: 2,
     alignSelf: "center",
     marginBottom: 16,
@@ -1208,7 +1267,6 @@ const styles = StyleSheet.create({
   actionsTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: colors.textPrimary,
     textAlign: "center",
     marginBottom: 16,
   },
@@ -1225,7 +1283,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     padding: 14,
-    backgroundColor: colors.backgroundSecondary,
     borderRadius: 12,
   },
   actionIcon: {
@@ -1239,7 +1296,6 @@ const styles = StyleSheet.create({
   actionText: {
     fontSize: 16,
     fontWeight: "500",
-    color: colors.textPrimary,
   },
   actionInfo: {
     flexDirection: "row",
@@ -1250,14 +1306,11 @@ const styles = StyleSheet.create({
   },
   actionInfoText: {
     fontSize: 13,
-    color: colors.textMuted,
     flex: 1,
   },
   actionInfoBadge: {
     fontSize: 12,
-    color: colors.primary,
     fontWeight: "500",
-    backgroundColor: colors.primaryLight,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
@@ -1266,13 +1319,11 @@ const styles = StyleSheet.create({
     marginTop: 12,
     padding: 16,
     alignItems: "center",
-    backgroundColor: colors.backgroundSecondary,
     borderRadius: 12,
   },
   actionCancelText: {
     fontSize: 16,
     fontWeight: "600",
-    color: colors.textSecondary,
   },
   // Avatar Viewer
   avatarViewerOverlay: {
@@ -1308,7 +1359,7 @@ const styles = StyleSheet.create({
   avatarViewerPlaceholderText: {
     fontSize: 72,
     fontWeight: "700",
-    color: colors.textLight,
+    color: "#fff",
   },
   avatarViewerInfo: {
     marginTop: 24,

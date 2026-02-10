@@ -1,5 +1,6 @@
-import { colors, getAvatarColor } from "@/constants/colors";
+import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -51,6 +52,7 @@ const safeHaptic = (
 
 export default function SearchScreen() {
   const { user } = useAuth();
+  const { colors } = useTheme();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -230,7 +232,11 @@ export default function SearchScreen() {
 
   const highlightText = (text: string) => {
     if (!searchQuery || searchQuery.trim().length < 2) {
-      return <Text style={styles.resultContent}>{text}</Text>;
+      return (
+        <Text style={[styles.resultContent, { color: colors.textSecondary }]}>
+          {text}
+        </Text>
+      );
     }
 
     const lowerText = text.toLowerCase();
@@ -238,7 +244,11 @@ export default function SearchScreen() {
     const index = lowerText.indexOf(lowerQuery);
 
     if (index === -1) {
-      return <Text style={styles.resultContent}>{text}</Text>;
+      return (
+        <Text style={[styles.resultContent, { color: colors.textSecondary }]}>
+          {text}
+        </Text>
+      );
     }
 
     // Показываем контекст вокруг найденного текста
@@ -258,9 +268,9 @@ export default function SearchScreen() {
     const after = displayText.substring(displayIndex + searchQuery.length);
 
     return (
-      <Text style={styles.resultContent}>
+      <Text style={[styles.resultContent, { color: colors.textSecondary }]}>
         {before}
-        <Text style={styles.highlight}>{match}</Text>
+        <Text style={[styles.highlight, { color: colors.text }]}>{match}</Text>
         {after}
       </Text>
     );
@@ -280,7 +290,10 @@ export default function SearchScreen() {
 
     return (
       <TouchableOpacity
-        style={styles.resultItem}
+        style={[
+          styles.resultItem,
+          { backgroundColor: colors.surface, borderBottomColor: colors.border },
+        ]}
         onPress={() => navigateToChat(item)}
         activeOpacity={0.7}
       >
@@ -299,9 +312,9 @@ export default function SearchScreen() {
               ]}
             >
               {chatInfo.isGroup ? (
-                <Ionicons name="people" size={20} color={colors.textLight} />
+                <Ionicons name="people" size={20} color="#fff" />
               ) : (
-                <Text style={styles.avatarText}>
+                <Text style={[styles.avatarText, { color: "#fff" }]}>
                   {chatInfo.name.charAt(0).toUpperCase()}
                 </Text>
               )}
@@ -312,14 +325,19 @@ export default function SearchScreen() {
         {/* Result Content */}
         <View style={styles.resultInfo}>
           <View style={styles.resultHeader}>
-            <Text style={styles.chatName} numberOfLines={1}>
+            <Text
+              style={[styles.chatName, { color: colors.text }]}
+              numberOfLines={1}
+            >
               {chatInfo.name}
             </Text>
-            <Text style={styles.resultDate}>{formatDate(item.created_at)}</Text>
+            <Text style={[styles.resultDate, { color: colors.textSecondary }]}>
+              {formatDate(item.created_at)}
+            </Text>
           </View>
 
           <View style={styles.resultBody}>
-            <Text style={styles.senderName}>
+            <Text style={[styles.senderName, { color: colors.primary }]}>
               {item.sender?.username || "Пользователь"}:{" "}
             </Text>
             {highlightText(item.content)}
@@ -330,9 +348,9 @@ export default function SearchScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: colors.primary }]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => {
@@ -340,14 +358,16 @@ export default function SearchScreen() {
             router.back();
           }}
         >
-          <Ionicons name="arrow-back" size={24} color={colors.textLight} />
+          <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
 
-        <View style={styles.searchContainer}>
+        <View
+          style={[styles.searchContainer, { backgroundColor: colors.surface }]}
+        >
           <Ionicons name="search" size={20} color={colors.textSecondary} />
           <TextInput
             ref={searchInputRef}
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: colors.text }]}
             placeholder="Поиск по всем чатам..."
             placeholderTextColor={colors.textSecondary}
             value={searchQuery}
@@ -380,7 +400,9 @@ export default function SearchScreen() {
       {loading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Поиск...</Text>
+          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+            Поиск...
+          </Text>
         </View>
       ) : results.length > 0 ? (
         <FlatList
@@ -390,7 +412,15 @@ export default function SearchScreen() {
           contentContainerStyle={styles.resultsList}
           showsVerticalScrollIndicator={false}
           ListHeaderComponent={
-            <Text style={styles.resultsHeader}>
+            <Text
+              style={[
+                styles.resultsHeader,
+                {
+                  color: colors.textSecondary,
+                  backgroundColor: colors.background,
+                },
+              ]}
+            >
               Найдено: {results.length}{" "}
               {results.length === 1
                 ? "сообщение"
@@ -402,29 +432,33 @@ export default function SearchScreen() {
         />
       ) : searched ? (
         <View style={styles.centerContainer}>
-          <View style={styles.emptyIcon}>
+          <View style={[styles.emptyIcon, { backgroundColor: colors.surface }]}>
             <Ionicons
               name="search-outline"
               size={48}
               color={colors.textSecondary}
             />
           </View>
-          <Text style={styles.emptyTitle}>Ничего не найдено</Text>
-          <Text style={styles.emptySubtitle}>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>
+            Ничего не найдено
+          </Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
             Попробуйте изменить поисковый запрос
           </Text>
         </View>
       ) : (
         <View style={styles.centerContainer}>
-          <View style={styles.emptyIcon}>
+          <View style={[styles.emptyIcon, { backgroundColor: colors.surface }]}>
             <Ionicons
               name="chatbubbles-outline"
               size={48}
               color={colors.primary}
             />
           </View>
-          <Text style={styles.emptyTitle}>Поиск по чатам</Text>
-          <Text style={styles.emptySubtitle}>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>
+            Поиск по чатам
+          </Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
             Введите текст для поиска сообщений{"\n"}во всех ваших чатах
           </Text>
         </View>
@@ -436,12 +470,10 @@ export default function SearchScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.primary,
     paddingTop: Platform.OS === "ios" ? 60 : 40,
     paddingBottom: 12,
     paddingHorizontal: 12,
@@ -457,7 +489,6 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.surface,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -466,7 +497,6 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: colors.text,
     paddingVertical: 0,
   },
   centerContainer: {
@@ -478,13 +508,11 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 12,
     fontSize: 16,
-    color: colors.textSecondary,
   },
   emptyIcon: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: colors.surface,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 16,
@@ -492,12 +520,10 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: "600",
-    color: colors.text,
     marginBottom: 8,
   },
   emptySubtitle: {
     fontSize: 15,
-    color: colors.textSecondary,
     textAlign: "center",
     lineHeight: 22,
   },
@@ -507,19 +533,15 @@ const styles = StyleSheet.create({
   resultsHeader: {
     fontSize: 14,
     fontWeight: "600",
-    color: colors.textSecondary,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: colors.background,
   },
   resultItem: {
     flexDirection: "row",
     alignItems: "flex-start",
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   resultAvatar: {
     marginRight: 12,
@@ -539,7 +561,6 @@ const styles = StyleSheet.create({
   avatarText: {
     fontSize: 18,
     fontWeight: "600",
-    color: colors.textLight,
   },
   resultInfo: {
     flex: 1,
@@ -553,13 +574,11 @@ const styles = StyleSheet.create({
   chatName: {
     fontSize: 16,
     fontWeight: "600",
-    color: colors.text,
     flex: 1,
     marginRight: 8,
   },
   resultDate: {
     fontSize: 13,
-    color: colors.textSecondary,
   },
   resultBody: {
     flexDirection: "row",
@@ -568,16 +587,13 @@ const styles = StyleSheet.create({
   senderName: {
     fontSize: 14,
     fontWeight: "500",
-    color: colors.primary,
   },
   resultContent: {
     fontSize: 14,
-    color: colors.textSecondary,
     flex: 1,
   },
   highlight: {
     backgroundColor: "#FFEB3B",
-    color: colors.text,
     fontWeight: "600",
   },
 });

@@ -1,5 +1,6 @@
-import { colors, getAvatarColor } from "@/constants/colors";
+import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { supabase } from "@/lib/supabase";
 import { Chat, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
@@ -42,6 +43,7 @@ export default function ChatsScreen() {
   const fabRotation = useRef(new Animated.Value(0)).current;
   const menuScale = useRef(new Animated.Value(0)).current;
   const { user } = useAuth();
+  const { colors } = useTheme();
   const router = useRouter();
 
   const toggleFabMenu = () => {
@@ -248,7 +250,7 @@ export default function ChatsScreen() {
 
     return (
       <TouchableOpacity
-        style={styles.chatItem}
+        style={[styles.chatItem, { borderBottomColor: colors.borderLight }]}
         onPress={handlePress}
         activeOpacity={0.7}
       >
@@ -294,7 +296,10 @@ export default function ChatsScreen() {
                   style={{ marginRight: 4 }}
                 />
               )}
-              <Text style={styles.chatName} numberOfLines={1}>
+              <Text
+                style={[styles.chatName, { color: colors.text }]}
+                numberOfLines={1}
+              >
                 {getChatName(item)}
               </Text>
             </View>
@@ -303,7 +308,8 @@ export default function ChatsScreen() {
                 <Text
                   style={[
                     styles.chatTime,
-                    item.unread_count > 0 && styles.chatTimeUnread,
+                    { color: colors.textSecondary },
+                    item.unread_count > 0 && { color: colors.primary },
                   ]}
                 >
                   {formatTime(item.last_message.created_at)}
@@ -315,7 +321,11 @@ export default function ChatsScreen() {
             <Text
               style={[
                 styles.lastMessage,
-                item.unread_count > 0 && styles.lastMessageUnread,
+                { color: colors.textSecondary },
+                item.unread_count > 0 && {
+                  color: colors.text,
+                  fontWeight: "500",
+                },
               ]}
               numberOfLines={1}
             >
@@ -331,7 +341,12 @@ export default function ChatsScreen() {
                 : item.last_message?.content || "Нет сообщений"}
             </Text>
             {item.unread_count > 0 && (
-              <View style={styles.unreadBadge}>
+              <View
+                style={[
+                  styles.unreadBadge,
+                  { backgroundColor: colors.primary },
+                ]}
+              >
                 <Text style={styles.unreadBadgeText}>
                   {item.unread_count > 99 ? "99+" : item.unread_count}
                 </Text>
@@ -344,18 +359,20 @@ export default function ChatsScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" />
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <StatusBar
+        barStyle={colors.text === "#1a1a1a" ? "dark-content" : "light-content"}
+      />
 
       {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Чаты</Text>
+      <View style={[styles.header, { backgroundColor: colors.background }]}>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Чаты</Text>
         <View style={{ width: 44 }} />
       </View>
 
       {/* Search Bar - navigates to global search */}
       <TouchableOpacity
-        style={styles.searchContainer}
+        style={[styles.searchContainer, { backgroundColor: colors.background }]}
         onPress={() => {
           if (Platform.OS !== "web") {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -364,33 +381,47 @@ export default function ChatsScreen() {
         }}
         activeOpacity={0.7}
       >
-        <View style={styles.searchBar}>
+        <View
+          style={[
+            styles.searchBar,
+            { backgroundColor: colors.inputBackground },
+          ]}
+        >
           <Ionicons
             name="search"
             size={18}
             color={colors.textMuted}
             style={{ marginRight: 8 }}
           />
-          <Text style={styles.searchPlaceholder}>Поиск по всем чатам</Text>
+          <Text style={[styles.searchPlaceholder, { color: colors.textMuted }]}>
+            Поиск по всем чатам
+          </Text>
         </View>
       </TouchableOpacity>
 
       {/* Chat List */}
       {chats.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <View style={styles.emptyIcon}>
+          <View
+            style={[styles.emptyIcon, { backgroundColor: colors.primaryLight }]}
+          >
             <Ionicons
               name="chatbubbles-outline"
               size={48}
               color={colors.primary}
             />
           </View>
-          <Text style={styles.emptyTitle}>Нет чатов</Text>
-          <Text style={styles.emptyText}>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>
+            Нет чатов
+          </Text>
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
             Начните общение, нажав на кнопку выше
           </Text>
           <TouchableOpacity
-            style={styles.startChatButton}
+            style={[
+              styles.startChatButton,
+              { backgroundColor: colors.primary },
+            ]}
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               router.push("/new-chat");
@@ -434,7 +465,7 @@ export default function ChatsScreen() {
         ]}
       >
         <TouchableOpacity
-          style={styles.fabButton}
+          style={[styles.fabButton, { backgroundColor: colors.primary }]}
           onPress={toggleFabMenu}
           activeOpacity={0.85}
         >
@@ -448,6 +479,7 @@ export default function ChatsScreen() {
           <Animated.View
             style={[
               styles.fabMenu,
+              { backgroundColor: colors.card },
               {
                 transform: [{ scale: menuScale }],
                 opacity: menuScale,
@@ -470,7 +502,9 @@ export default function ChatsScreen() {
               >
                 <Ionicons name="person" size={20} color="#fff" />
               </View>
-              <Text style={styles.fabMenuText}>Новый чат</Text>
+              <Text style={[styles.fabMenuText, { color: colors.text }]}>
+                Новый чат
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -486,7 +520,9 @@ export default function ChatsScreen() {
               >
                 <Ionicons name="people" size={20} color="#fff" />
               </View>
-              <Text style={styles.fabMenuText}>Новая группа</Text>
+              <Text style={[styles.fabMenuText, { color: colors.text }]}>
+                Новая группа
+              </Text>
             </TouchableOpacity>
           </Animated.View>
         </Pressable>
@@ -545,7 +581,6 @@ export default function ChatsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
   },
   header: {
     flexDirection: "row",
@@ -554,18 +589,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 60,
     paddingBottom: 16,
-    backgroundColor: colors.background,
   },
   headerTitle: {
     fontSize: 34,
     fontWeight: "bold",
-    color: colors.textPrimary,
   },
   newChatButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: colors.primaryLight,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -576,14 +608,12 @@ const styles = StyleSheet.create({
   searchBar: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.inputBackground,
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   searchPlaceholder: {
     fontSize: 16,
-    color: colors.textMuted,
   },
   listContainer: {
     paddingBottom: 20,
@@ -608,7 +638,6 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: colors.border,
   },
   onlineIndicator: {
     position: "absolute",
@@ -619,10 +648,9 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     backgroundColor: "#4CAF50",
     borderWidth: 2,
-    borderColor: colors.background,
   },
   avatarText: {
-    color: colors.textLight,
+    color: "#fff",
     fontSize: 22,
     fontWeight: "600",
   },
@@ -630,7 +658,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     borderBottomWidth: 0.5,
-    borderBottomColor: colors.borderLight,
     paddingBottom: 14,
   },
   chatHeader: {
@@ -647,16 +674,13 @@ const styles = StyleSheet.create({
   chatName: {
     fontSize: 17,
     fontWeight: "600",
-    color: colors.textPrimary,
     flex: 1,
     marginRight: 8,
   },
   chatTime: {
     fontSize: 14,
-    color: colors.textMuted,
   },
   chatTimeUnread: {
-    color: colors.primary,
     fontWeight: "500",
   },
   chatFooter: {
@@ -670,16 +694,13 @@ const styles = StyleSheet.create({
   },
   lastMessage: {
     fontSize: 15,
-    color: colors.textSecondary,
     flex: 1,
     marginRight: 8,
   },
   lastMessageUnread: {
-    color: colors.textPrimary,
     fontWeight: "500",
   },
   unreadBadge: {
-    backgroundColor: colors.primary,
     borderRadius: 12,
     minWidth: 24,
     height: 24,
@@ -688,7 +709,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   unreadBadgeText: {
-    color: colors.textLight,
+    color: "#fff",
     fontSize: 13,
     fontWeight: "bold",
   },
@@ -702,7 +723,6 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: colors.primaryLight,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 24,
@@ -710,28 +730,24 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 22,
     fontWeight: "bold",
-    color: colors.textPrimary,
     marginBottom: 8,
   },
   emptyText: {
     fontSize: 16,
-    color: colors.textSecondary,
     textAlign: "center",
     marginBottom: 24,
   },
   startChatButton: {
-    backgroundColor: colors.primary,
     paddingHorizontal: 32,
     paddingVertical: 14,
     borderRadius: 25,
-    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,
   },
   startChatButtonText: {
-    color: colors.textLight,
+    color: "#fff",
     fontSize: 16,
     fontWeight: "600",
   },
@@ -746,10 +762,8 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: colors.primary,
     justifyContent: "center",
     alignItems: "center",
-    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 8,
@@ -764,7 +778,6 @@ const styles = StyleSheet.create({
     paddingRight: 20,
   },
   fabMenu: {
-    backgroundColor: colors.background,
     borderRadius: 16,
     paddingVertical: 8,
     minWidth: 180,
@@ -791,7 +804,6 @@ const styles = StyleSheet.create({
   fabMenuText: {
     fontSize: 16,
     fontWeight: "500",
-    color: colors.text,
   },
   // Avatar Viewer
   avatarViewerOverlay: {

@@ -59,7 +59,10 @@ const safeNotificationHaptic = (
 };
 
 export default function ChatScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, highlightMessage } = useLocalSearchParams<{
+    id: string;
+    highlightMessage?: string;
+  }>();
   const [messages, setMessages] = useState<MessageWithSender[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
@@ -76,6 +79,7 @@ export default function ChatScreen() {
   const [showAvatarViewer, setShowAvatarViewer] = useState(false);
   const { user } = useAuth();
   const flatListRef = useRef<FlatList>(null);
+  const skipAutoScrollRef = useRef(false);
   const router = useRouter();
   const channelRef = useRef<RealtimeChannel | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
@@ -187,6 +191,59 @@ export default function ChatScreen() {
       }
     };
   }, [id]);
+
+  // Подсветка сообщения из глобального поиска
+  useEffect(() => {
+    if (highlightMessage && messages.length > 0 && !loading) {
+      skipAutoScrollRef.current = true;
+      const timer = setTimeout(() => {
+        const msgIndex = messages.findIndex((m) => m.id === highlightMessage);
+        if (msgIndex !== -1) {
+          setHighlightedMessageId(highlightMessage);
+
+          flatListRef.current?.scrollToIndex({
+            index: msgIndex,
+            animated: true,
+            viewPosition: 0.5,
+          });
+
+          // Анимация подсветки
+          highlightAnimation.setValue(0);
+          Animated.sequence([
+            Animated.timing(highlightAnimation, {
+              toValue: 1,
+              duration: 300,
+              useNativeDriver: true,
+            }),
+            Animated.timing(highlightAnimation, {
+              toValue: 0.4,
+              duration: 200,
+              useNativeDriver: true,
+            }),
+            Animated.timing(highlightAnimation, {
+              toValue: 1,
+              duration: 200,
+              useNativeDriver: true,
+            }),
+            Animated.delay(800),
+            Animated.timing(highlightAnimation, {
+              toValue: 0,
+              duration: 400,
+              useNativeDriver: true,
+            }),
+          ]).start(() => {
+            setHighlightedMessageId(null);
+            // Сбрасываем флаг через небольшую задержку после анимации
+            setTimeout(() => {
+              skipAutoScrollRef.current = false;
+            }, 500);
+          });
+        }
+      }, 500);
+
+      return () => clearTimeout(timer);
+    }
+  }, [highlightMessage, messages.length, loading]);
 
   const fetchChatInfo = async () => {
     if (!id || !user) return;
@@ -2089,7 +2146,21 @@ export default function ChatScreen() {
           renderItem={renderMessage}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.messagesList}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
+          onContentSizeChange={() => {
+            if (!skipAutoScrollRef.current) {
+              flatListRef.current?.scrollToEnd();
+            }
+          }}
+          onScrollToIndexFailed={(info) => {
+            const wait = new Promise((resolve) => setTimeout(resolve, 100));
+            wait.then(() => {
+              flatListRef.current?.scrollToIndex({
+                index: info.index,
+                animated: true,
+                viewPosition: 0.5,
+              });
+            });
+          }}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>

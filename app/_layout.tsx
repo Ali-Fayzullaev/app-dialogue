@@ -1,7 +1,7 @@
 import {
-  DarkTheme,
-  DefaultTheme,
-  ThemeProvider,
+    DarkTheme,
+    DefaultTheme,
+    ThemeProvider,
 } from "@react-navigation/native";
 import * as Notifications from "expo-notifications";
 import { Stack, useRouter } from "expo-router";
@@ -75,6 +75,7 @@ function RootLayoutNav() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="chat/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="search" options={{ headerShown: false }} />
         <Stack.Screen
           name="new-chat"
           options={{ presentation: "modal", title: "Новый чат" }}

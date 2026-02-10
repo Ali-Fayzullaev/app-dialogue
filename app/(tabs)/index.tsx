@@ -353,8 +353,17 @@ export default function ChatsScreen() {
         <View style={{ width: 44 }} />
       </View>
 
-      {/* Search Bar (visual) */}
-      <View style={styles.searchContainer}>
+      {/* Search Bar - navigates to global search */}
+      <TouchableOpacity
+        style={styles.searchContainer}
+        onPress={() => {
+          if (Platform.OS !== "web") {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          }
+          router.push("/search");
+        }}
+        activeOpacity={0.7}
+      >
         <View style={styles.searchBar}>
           <Ionicons
             name="search"
@@ -362,9 +371,9 @@ export default function ChatsScreen() {
             color={colors.textMuted}
             style={{ marginRight: 8 }}
           />
-          <Text style={styles.searchPlaceholder}>Поиск</Text>
+          <Text style={styles.searchPlaceholder}>Поиск по всем чатам</Text>
         </View>
-      </View>
+      </TouchableOpacity>
 
       {/* Chat List */}
       {chats.length === 0 ? (

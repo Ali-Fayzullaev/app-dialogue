@@ -365,6 +365,24 @@ export const groupService = {
   },
 
   /**
+   * Очистить историю чата (удалить все сообщения)
+   */
+  async clearChatHistory(chatId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from("messages")
+        .delete()
+        .eq("chat_id", chatId);
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error("Error clearing chat history:", error);
+      return false;
+    }
+  },
+
+  /**
    * Удалить группу (только для админа)
    */
   async deleteGroup(chatId: string): Promise<boolean> {

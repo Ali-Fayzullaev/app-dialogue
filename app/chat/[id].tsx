@@ -1175,22 +1175,99 @@ export default function ChatScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* Кнопка настроек для групп */}
-        {isGroup && (
-          <TouchableOpacity
-            style={styles.headerSettingsButton}
-            onPress={() => {
-              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+        {/* Кнопка меню/настроек */}
+        <TouchableOpacity
+          style={styles.headerSettingsButton}
+          onPress={() => {
+            safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+            if (isGroup) {
               router.push(`/group/${id}/settings` as any);
-            }}
-          >
-            <Ionicons
-              name="settings-outline"
-              size={22}
-              color={colors.textLight}
-            />
-          </TouchableOpacity>
-        )}
+            } else {
+              // Показать меню действий для личного чата
+              if (Platform.OS === "ios") {
+                ActionSheetIOS.showActionSheetWithOptions(
+                  {
+                    options: ["Очистить историю", "Открыть профиль", "Отмена"],
+                    destructiveButtonIndex: 0,
+                    cancelButtonIndex: 2,
+                  },
+                  async (buttonIndex) => {
+                    if (buttonIndex === 0) {
+                      Alert.alert(
+                        "Очистить историю",
+                        "Удалить все сообщения в этом чате? Это действие нельзя отменить.",
+                        [
+                          { text: "Отмена", style: "cancel" },
+                          {
+                            text: "Очистить",
+                            style: "destructive",
+                            onPress: async () => {
+                              const { error } = await supabase
+                                .from("messages")
+                                .delete()
+                                .eq("chat_id", id);
+                              if (!error) {
+                                setMessages([]);
+                                Alert.alert("Готово", "История чата очищена");
+                              }
+                            },
+                          },
+                        ],
+                      );
+                    } else if (buttonIndex === 1 && otherUser?.id) {
+                      router.push(`/profile/${otherUser.id}` as any);
+                    }
+                  },
+                );
+              } else {
+                Alert.alert("Действия", "Выберите действие", [
+                  {
+                    text: "Очистить историю",
+                    style: "destructive",
+                    onPress: () => {
+                      Alert.alert(
+                        "Очистить историю",
+                        "Удалить все сообщения в этом чате?",
+                        [
+                          { text: "Отмена", style: "cancel" },
+                          {
+                            text: "Очистить",
+                            style: "destructive",
+                            onPress: async () => {
+                              const { error } = await supabase
+                                .from("messages")
+                                .delete()
+                                .eq("chat_id", id);
+                              if (!error) {
+                                setMessages([]);
+                                Alert.alert("Готово", "История чата очищена");
+                              }
+                            },
+                          },
+                        ],
+                      );
+                    },
+                  },
+                  {
+                    text: "Открыть профиль",
+                    onPress: () => {
+                      if (otherUser?.id) {
+                        router.push(`/profile/${otherUser.id}` as any);
+                      }
+                    },
+                  },
+                  { text: "Отмена", style: "cancel" },
+                ]);
+              }
+            }
+          }}
+        >
+          <Ionicons
+            name={isGroup ? "settings-outline" : "ellipsis-vertical"}
+            size={22}
+            color={colors.textLight}
+          />
+        </TouchableOpacity>
       </View>
 
       {/* Messages */}

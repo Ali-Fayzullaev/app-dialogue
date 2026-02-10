@@ -573,6 +573,46 @@ export default function GroupSettingsScreen() {
 
         {/* Actions */}
         <View style={styles.actionsSection}>
+          {isAdmin && (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => {
+                Alert.alert(
+                  "Очистить историю",
+                  "Удалить все сообщения в группе? Это действие нельзя отменить.",
+                  [
+                    { text: "Отмена", style: "cancel" },
+                    {
+                      text: "Очистить",
+                      style: "destructive",
+                      onPress: async () => {
+                        const success = await groupService.clearChatHistory(
+                          id!,
+                        );
+                        if (success) {
+                          Alert.alert("Готово", "История чата очищена");
+                        } else {
+                          Alert.alert("Ошибка", "Не удалось очистить историю");
+                        }
+                      },
+                    },
+                  ],
+                );
+              }}
+            >
+              <Ionicons
+                name="trash-bin-outline"
+                size={22}
+                color={colors.warning}
+              />
+              <Text
+                style={[styles.actionButtonText, { color: colors.warning }]}
+              >
+                Очистить историю
+              </Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
             style={styles.actionButton}
             onPress={handleLeaveGroup}

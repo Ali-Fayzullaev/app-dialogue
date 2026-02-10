@@ -118,6 +118,13 @@ export default function ChatScreen() {
   const [messageToPin, setMessageToPin] = useState<MessageWithSender | null>(
     null,
   );
+  // Поиск по сообщениям
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<MessageWithSender[]>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
+  const searchAnimation = useRef(new Animated.Value(0)).current;
+  const searchInputRef = useRef<TextInput>(null);
 
   // Онлайн статус собеседника
   const { isOnline, formatLastSeen } = useUserOnlineStatus(
@@ -868,6 +875,122 @@ export default function ChatScreen() {
     }
   };
 
+  // Функции поиска по сообщениям
+  const openSearch = () => {
+    setShowSearch(true);
+    Animated.timing(searchAnimation, {
+      toValue: 1,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(() => {
+      searchInputRef.current?.focus();
+    });
+  };
+
+  const closeSearch = () => {
+    Animated.timing(searchAnimation, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowSearch(false);
+      setSearchQuery("");
+      setSearchResults([]);
+      setCurrentSearchIndex(0);
+      setHighlightedMessageId(null);
+    });
+  };
+
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+
+    if (query.trim().length < 2) {
+      setSearchResults([]);
+      setCurrentSearchIndex(0);
+      return;
+    }
+
+    const lowerQuery = query.toLowerCase();
+    const results = messages.filter(
+      (m) => m.content && m.content.toLowerCase().includes(lowerQuery),
+    );
+
+    setSearchResults(results);
+    setCurrentSearchIndex(results.length > 0 ? 0 : -1);
+
+    // Перейти к первому результату
+    if (results.length > 0) {
+      scrollToSearchResult(0, results);
+    }
+  };
+
+  const scrollToSearchResult = (
+    index: number,
+    results?: MessageWithSender[],
+  ) => {
+    const searchList = results || searchResults;
+    if (searchList.length === 0 || index < 0 || index >= searchList.length)
+      return;
+
+    const targetMessage = searchList[index];
+    const msgIndex = messages.findIndex((m) => m.id === targetMessage.id);
+
+    if (msgIndex !== -1) {
+      setHighlightedMessageId(targetMessage.id);
+
+      flatListRef.current?.scrollToIndex({
+        index: msgIndex,
+        animated: true,
+        viewPosition: 0.5,
+      });
+
+      // Анимация подсветки
+      highlightAnimation.setValue(0);
+      Animated.sequence([
+        Animated.timing(highlightAnimation, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(highlightAnimation, {
+          toValue: 0.3,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(highlightAnimation, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.delay(500),
+        Animated.timing(highlightAnimation, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setHighlightedMessageId(null);
+      });
+
+      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    }
+  };
+
+  const navigateSearchResult = (direction: "next" | "prev") => {
+    if (searchResults.length === 0) return;
+
+    let newIndex: number;
+    if (direction === "next") {
+      newIndex = (currentSearchIndex + 1) % searchResults.length;
+    } else {
+      newIndex =
+        (currentSearchIndex - 1 + searchResults.length) % searchResults.length;
+    }
+
+    setCurrentSearchIndex(newIndex);
+    scrollToSearchResult(newIndex);
+  };
+
   const startEditingMessage = (message: MessageWithSender) => {
     setEditingMessage(message);
     setNewMessage(message.content);
@@ -1199,6 +1322,56 @@ export default function ChatScreen() {
     }
   };
 
+  // Функция подсветки найденного текста
+  const highlightSearchText = (text: string, isMyMessage: boolean) => {
+    if (!searchQuery || searchQuery.trim().length < 2) {
+      return (
+        <Text
+          style={[
+            styles.messageText,
+            isMyMessage ? styles.myMessageText : styles.otherMessageText,
+          ]}
+        >
+          {text}
+        </Text>
+      );
+    }
+
+    const lowerText = text.toLowerCase();
+    const lowerQuery = searchQuery.toLowerCase();
+    const index = lowerText.indexOf(lowerQuery);
+
+    if (index === -1) {
+      return (
+        <Text
+          style={[
+            styles.messageText,
+            isMyMessage ? styles.myMessageText : styles.otherMessageText,
+          ]}
+        >
+          {text}
+        </Text>
+      );
+    }
+
+    const before = text.substring(0, index);
+    const match = text.substring(index, index + searchQuery.length);
+    const after = text.substring(index + searchQuery.length);
+
+    return (
+      <Text
+        style={[
+          styles.messageText,
+          isMyMessage ? styles.myMessageText : styles.otherMessageText,
+        ]}
+      >
+        {before}
+        <Text style={styles.searchHighlight}>{match}</Text>
+        {after}
+      </Text>
+    );
+  };
+
   const formatMessageTime = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleTimeString("ru-RU", {
@@ -1431,18 +1604,9 @@ export default function ChatScreen() {
                 </TouchableOpacity>
               )}
               {/* Text content */}
-              {item.content ? (
-                <Text
-                  style={[
-                    styles.messageText,
-                    isMyMessage
-                      ? styles.myMessageText
-                      : styles.otherMessageText,
-                  ]}
-                >
-                  {item.content}
-                </Text>
-              ) : null}
+              {item.content
+                ? highlightSearchText(item.content, isMyMessage)
+                : null}
               <Text
                 style={[
                   styles.messageTime,
@@ -1592,6 +1756,17 @@ export default function ChatScreen() {
           </View>
         </TouchableOpacity>
 
+        {/* Кнопка поиска */}
+        <TouchableOpacity
+          style={styles.headerSearchButton}
+          onPress={() => {
+            safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+            openSearch();
+          }}
+        >
+          <Ionicons name="search" size={22} color={colors.textLight} />
+        </TouchableOpacity>
+
         {/* Кнопка меню/настроек */}
         <TouchableOpacity
           style={styles.headerSettingsButton}
@@ -1686,6 +1861,88 @@ export default function ChatScreen() {
           />
         </TouchableOpacity>
       </View>
+
+      {/* Search Bar */}
+      {showSearch && (
+        <Animated.View
+          style={[
+            styles.searchBar,
+            {
+              opacity: searchAnimation,
+              transform: [
+                {
+                  translateY: searchAnimation.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-50, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.searchInputContainer}>
+            <Ionicons name="search" size={20} color={colors.textSecondary} />
+            <TextInput
+              ref={searchInputRef}
+              style={styles.searchInput}
+              placeholder="Поиск по сообщениям..."
+              placeholderTextColor={colors.textSecondary}
+              value={searchQuery}
+              onChangeText={handleSearch}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity
+                onPress={() => {
+                  setSearchQuery("");
+                  setSearchResults([]);
+                  searchInputRef.current?.focus();
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons
+                  name="close-circle"
+                  size={20}
+                  color={colors.textSecondary}
+                />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {searchResults.length > 0 && (
+            <View style={styles.searchNavigation}>
+              <Text style={styles.searchResultsCount}>
+                {currentSearchIndex + 1}/{searchResults.length}
+              </Text>
+              <TouchableOpacity
+                style={styles.searchNavButton}
+                onPress={() => navigateSearchResult("prev")}
+              >
+                <Ionicons name="chevron-up" size={22} color={colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.searchNavButton}
+                onPress={() => navigateSearchResult("next")}
+              >
+                <Ionicons
+                  name="chevron-down"
+                  size={22}
+                  color={colors.primary}
+                />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={styles.searchCloseButton}
+            onPress={closeSearch}
+          >
+            <Ionicons name="close" size={24} color={colors.textLight} />
+          </TouchableOpacity>
+        </Animated.View>
+      )}
 
       {/* Messages */}
       <View style={styles.messagesContainer}>
@@ -3556,5 +3813,68 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "600",
     color: colors.primary,
+  },
+  // Search styles
+  headerSearchButton: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 4,
+  },
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  searchInputContainer: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: colors.text,
+    paddingVertical: 0,
+  },
+  searchNavigation: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  searchResultsCount: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textLight,
+    marginRight: 4,
+  },
+  searchNavButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  searchCloseButton: {
+    width: 36,
+    height: 36,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  searchHighlight: {
+    backgroundColor: "#FFEB3B",
+    color: "#000",
+    borderRadius: 2,
+    fontWeight: "600",
   },
 });

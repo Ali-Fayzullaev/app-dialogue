@@ -104,6 +104,20 @@ export default function ChatScreen() {
   const typingDot1 = useRef(new Animated.Value(0.3)).current;
   const typingDot2 = useRef(new Animated.Value(0.3)).current;
   const typingDot3 = useRef(new Animated.Value(0.3)).current;
+  const [pinnedMessages, setPinnedMessages] = useState<
+    { message: MessageWithSender; isPersonal: boolean }[]
+  >([]);
+  const [currentPinnedIndex, setCurrentPinnedIndex] = useState(0);
+  const pinnedAnimation = useRef(new Animated.Value(0)).current;
+  const [highlightedMessageId, setHighlightedMessageId] = useState<
+    string | null
+  >(null);
+  const highlightAnimation = useRef(new Animated.Value(0)).current;
+  const [showPinOptions, setShowPinOptions] = useState(false);
+  const pinOptionsAnimation = useRef(new Animated.Value(0)).current;
+  const [messageToPin, setMessageToPin] = useState<MessageWithSender | null>(
+    null,
+  );
 
   // Онлайн статус собеседника
   const { isOnline, formatLastSeen } = useUserOnlineStatus(
@@ -151,6 +165,7 @@ export default function ChatScreen() {
   useEffect(() => {
     fetchChatInfo();
     fetchMessages();
+    fetchPinnedMessages();
     subscribeToMessages();
 
     return () => {
@@ -288,6 +303,265 @@ export default function ChatScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchPinnedMessages = async () => {
+    if (!id || !user) return;
+
+    try {
+      const allPinned: { message: MessageWithSender; isPersonal: boolean }[] =
+        [];
+
+      // Получаем общие закреплённые сообщения чата
+      const { data: chatPins } = await (supabase as any)
+        .from("pinned_messages")
+        .select("message_id")
+        .eq("chat_id", id)
+        .is("user_id", null)
+        .order("created_at", { ascending: true });
+
+      // Получаем личные закреплённые сообщения
+      const { data: personalPins } = await (supabase as any)
+        .from("pinned_messages")
+        .select("message_id")
+        .eq("chat_id", id)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true });
+
+      const allMessageIds = [
+        ...((chatPins as any[])?.map((p: any) => ({
+          id: p.message_id,
+          isPersonal: false,
+        })) || []),
+        ...((personalPins as any[])?.map((p: any) => ({
+          id: p.message_id,
+          isPersonal: true,
+        })) || []),
+      ];
+
+      if (allMessageIds.length === 0) {
+        setPinnedMessages([]);
+        return;
+      }
+
+      // Получаем сообщения
+      const { data: messages } = await supabase
+        .from("messages")
+        .select("*")
+        .in(
+          "id",
+          allMessageIds.map((m) => m.id),
+        );
+
+      if (!messages) return;
+
+      // Получаем профили отправителей
+      const senderIds = [...new Set(messages.map((m) => m.sender_id))];
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("*")
+        .in("id", senderIds);
+
+      const profileMap = new Map(profiles?.map((p) => [p.id, p]));
+
+      // Формируем массив закреплённых
+      for (const pin of allMessageIds) {
+        const msg = messages.find((m) => m.id === pin.id);
+        if (msg) {
+          allPinned.push({
+            message: { ...msg, sender: profileMap.get(msg.sender_id) || null },
+            isPersonal: pin.isPersonal,
+          });
+        }
+      }
+
+      setPinnedMessages(allPinned);
+      setCurrentPinnedIndex(0);
+
+      if (allPinned.length > 0) {
+        Animated.timing(pinnedAnimation, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }).start();
+      }
+    } catch (error) {
+      console.error("Error fetching pinned messages:", error);
+    }
+  };
+
+  const showPinOptionsMenu = () => {
+    setShowPinOptions(true);
+    Animated.spring(pinOptionsAnimation, {
+      toValue: 1,
+      useNativeDriver: true,
+      tension: 100,
+      friction: 8,
+    }).start();
+  };
+
+  const hidePinOptionsMenu = () => {
+    Animated.timing(pinOptionsAnimation, {
+      toValue: 0,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowPinOptions(false);
+    });
+  };
+
+  const pinMessage = async (
+    message: MessageWithSender,
+    isPersonal: boolean,
+  ) => {
+    if (!id || !user) return;
+
+    try {
+      const pinData = {
+        chat_id: id,
+        message_id: message.id,
+        user_id: isPersonal ? user.id : null,
+      };
+
+      console.log("Pinning message:", pinData);
+
+      const { error } = await (supabase as any)
+        .from("pinned_messages")
+        .insert(pinData);
+
+      if (error) {
+        console.error("Pin error:", error);
+        throw error;
+      }
+
+      console.log("Message pinned successfully");
+
+      // Добавляем в локальный state
+      setPinnedMessages((prev) => [...prev, { message, isPersonal }]);
+      setCurrentPinnedIndex((prev) => prev);
+
+      if (pinnedMessages.length === 0) {
+        Animated.timing(pinnedAnimation, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }).start();
+      }
+
+      safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error("Error pinning message:", error);
+      Alert.alert("Ошибка", "Не удалось закрепить сообщение");
+    }
+  };
+
+  const unpinMessage = async (messageId: string, isPersonal: boolean) => {
+    if (!id || !user) return;
+
+    try {
+      let query = (supabase as any)
+        .from("pinned_messages")
+        .delete()
+        .eq("chat_id", id)
+        .eq("message_id", messageId);
+
+      if (isPersonal) {
+        query = query.eq("user_id", user.id);
+      } else {
+        query = query.is("user_id", null);
+      }
+
+      const { error } = await query;
+      if (error) throw error;
+
+      // Убираем из локального state
+      setPinnedMessages((prev) => {
+        const newPinned = prev.filter(
+          (p) => !(p.message.id === messageId && p.isPersonal === isPersonal),
+        );
+        if (newPinned.length === 0) {
+          Animated.timing(pinnedAnimation, {
+            toValue: 0,
+            duration: 200,
+            useNativeDriver: true,
+          }).start();
+        }
+        return newPinned;
+      });
+
+      // Корректируем индекс
+      setCurrentPinnedIndex((prev) =>
+        Math.max(0, Math.min(prev, pinnedMessages.length - 2)),
+      );
+
+      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      console.error("Error unpinning message:", error);
+      Alert.alert("Ошибка", "Не удалось открепить сообщение");
+    }
+  };
+
+  const scrollToPinnedMessage = (index?: number) => {
+    const pinIndex = index !== undefined ? index : currentPinnedIndex;
+    const pinned = pinnedMessages[pinIndex];
+    if (!pinned) return;
+
+    const msgIndex = messages.findIndex((m) => m.id === pinned.message.id);
+    if (msgIndex !== -1) {
+      // Установить highlighted сообщение
+      setHighlightedMessageId(pinned.message.id);
+
+      flatListRef.current?.scrollToIndex({
+        index: msgIndex,
+        animated: true,
+        viewPosition: 0.5,
+      });
+
+      // Анимация подсветки
+      highlightAnimation.setValue(0);
+      Animated.sequence([
+        Animated.timing(highlightAnimation, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(highlightAnimation, {
+          toValue: 0.3,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(highlightAnimation, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(highlightAnimation, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setHighlightedMessageId(null);
+      });
+
+      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    }
+  };
+
+  const navigatePinnedMessage = (direction: "next" | "prev") => {
+    if (pinnedMessages.length <= 1) return;
+
+    let newIndex: number;
+    if (direction === "next") {
+      newIndex = (currentPinnedIndex + 1) % pinnedMessages.length;
+    } else {
+      newIndex =
+        (currentPinnedIndex - 1 + pinnedMessages.length) %
+        pinnedMessages.length;
+    }
+
+    setCurrentPinnedIndex(newIndex);
+    scrollToPinnedMessage(newIndex);
   };
 
   const subscribeToMessages = () => {
@@ -532,39 +806,66 @@ export default function ChatScreen() {
     });
   };
 
-  const handleMenuAction = (action: "copy" | "edit" | "delete" | "reply") => {
+  const handleMenuAction = (
+    action: "copy" | "edit" | "delete" | "reply" | "pin",
+  ) => {
+    const messageToProcess = selectedMessage;
     closeMessageMenu();
 
     setTimeout(() => {
-      if (!selectedMessage) return;
+      if (!messageToProcess) return;
 
       switch (action) {
         case "reply":
-          setReplyingTo(selectedMessage);
+          setReplyingTo(messageToProcess);
           safeHaptic(Haptics.ImpactFeedbackStyle.Light);
           break;
         case "edit":
           if (
-            selectedMessage.content &&
-            selectedMessage.sender_id === user?.id
+            messageToProcess.content &&
+            messageToProcess.sender_id === user?.id
           ) {
-            startEditingMessage(selectedMessage);
+            startEditingMessage(messageToProcess);
           }
           break;
         case "delete":
-          if (selectedMessage.sender_id === user?.id) {
-            confirmDeleteMessage(selectedMessage);
+          if (messageToProcess.sender_id === user?.id) {
+            confirmDeleteMessage(messageToProcess);
           }
           break;
         case "copy":
           // Копирование текста в буфер обмена
-          if (selectedMessage.content) {
-            Clipboard.setStringAsync(selectedMessage.content);
+          if (messageToProcess.content) {
+            Clipboard.setStringAsync(messageToProcess.content);
             safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+          }
+          break;
+        case "pin":
+          // Проверяем, уже закреплено ли это сообщение
+          const existingPin = pinnedMessages.find(
+            (p) => p.message.id === messageToProcess.id,
+          );
+          if (existingPin) {
+            // Открепить
+            unpinMessage(messageToProcess.id, existingPin.isPersonal);
+          } else {
+            // Сохраняем сообщение для закрепления и показываем диалог
+            setMessageToPin(messageToProcess);
+            showPinOptionsMenu();
           }
           break;
       }
     }, 200);
+  };
+
+  const handlePinOption = (isPersonal: boolean) => {
+    hidePinOptionsMenu();
+    if (messageToPin) {
+      setTimeout(() => {
+        pinMessage(messageToPin, isPersonal);
+        setMessageToPin(null);
+      }, 200);
+    }
   };
 
   const startEditingMessage = (message: MessageWithSender) => {
@@ -937,6 +1238,7 @@ export default function ChatScreen() {
   }) => {
     const isMyMessage = item.sender_id === user?.id;
     const showDate = shouldShowDateSeparator(index);
+    const isHighlighted = highlightedMessageId === item.id;
 
     return (
       <>
@@ -947,197 +1249,224 @@ export default function ChatScreen() {
             </Text>
           </View>
         )}
-        <TouchableOpacity
+        <Animated.View
           style={[
-            styles.messageContainer,
-            isMyMessage
-              ? styles.myMessageContainer
-              : styles.otherMessageContainer,
+            isHighlighted && {
+              backgroundColor: highlightAnimation.interpolate({
+                inputRange: [0, 1],
+                outputRange: ["transparent", colors.primaryLight],
+              }),
+              transform: [
+                {
+                  scale: highlightAnimation.interpolate({
+                    inputRange: [0, 0.5, 1],
+                    outputRange: [1, 1.02, 1],
+                  }),
+                },
+              ],
+            },
           ]}
-          onLongPress={() => handleMessageLongPress(item)}
-          activeOpacity={0.8}
-          delayLongPress={300}
         >
-          <View
+          <TouchableOpacity
             style={[
-              styles.messageBubble,
-              isMyMessage ? styles.myMessageBubble : styles.otherMessageBubble,
-              item.media_url && styles.mediaBubble,
+              styles.messageContainer,
+              isMyMessage
+                ? styles.myMessageContainer
+                : styles.otherMessageContainer,
             ]}
+            onLongPress={() => handleMessageLongPress(item)}
+            activeOpacity={0.8}
+            delayLongPress={300}
           >
-            {/* Sender name for group messages */}
-            {isGroup && !isMyMessage && item.sender && (
-              <Text
-                style={[
-                  styles.senderName,
-                  { color: getAvatarColor(item.sender.id) },
-                ]}
-              >
-                {item.sender.username}
-              </Text>
-            )}
-            {/* Replied message quote */}
-            {item.replied_message && (
-              <TouchableOpacity
-                style={[
-                  styles.repliedMessageContainer,
-                  isMyMessage && styles.repliedMessageContainerMy,
-                ]}
-                activeOpacity={0.7}
-                onPress={() => {
-                  // Scroll to replied message
-                  const replyIndex = messages.findIndex(
-                    (m) => m.id === item.replied_message?.id,
-                  );
-                  if (replyIndex !== -1) {
-                    flatListRef.current?.scrollToIndex({
-                      index: replyIndex,
-                      animated: true,
-                    });
-                  }
-                }}
-              >
-                <Text style={styles.repliedMessageSender}>
-                  {item.replied_message.sender?.username || "Пользователь"}
-                </Text>
+            <View
+              style={[
+                styles.messageBubble,
+                isMyMessage
+                  ? styles.myMessageBubble
+                  : styles.otherMessageBubble,
+                item.media_url && styles.mediaBubble,
+              ]}
+            >
+              {/* Sender name for group messages */}
+              {isGroup && !isMyMessage && item.sender && (
                 <Text
                   style={[
-                    styles.repliedMessageText,
-                    isMyMessage && styles.repliedMessageTextMy,
+                    styles.senderName,
+                    { color: getAvatarColor(item.sender.id) },
                   ]}
-                  numberOfLines={2}
                 >
-                  {item.replied_message.content ||
-                    (item.replied_message.media_type === "image"
-                      ? "📷 Фото"
-                      : item.replied_message.media_type === "video"
-                        ? "📹 Видео"
-                        : "🎵 Аудио")}
+                  {item.sender.username}
                 </Text>
-              </TouchableOpacity>
-            )}
+              )}
+              {/* Replied message quote */}
+              {item.replied_message && (
+                <TouchableOpacity
+                  style={[
+                    styles.repliedMessageContainer,
+                    isMyMessage && styles.repliedMessageContainerMy,
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    // Scroll to replied message
+                    const replyIndex = messages.findIndex(
+                      (m) => m.id === item.replied_message?.id,
+                    );
+                    if (replyIndex !== -1) {
+                      flatListRef.current?.scrollToIndex({
+                        index: replyIndex,
+                        animated: true,
+                      });
+                    }
+                  }}
+                >
+                  <Text style={styles.repliedMessageSender}>
+                    {item.replied_message.sender?.username || "Пользователь"}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.repliedMessageText,
+                      isMyMessage && styles.repliedMessageTextMy,
+                    ]}
+                    numberOfLines={2}
+                  >
+                    {item.replied_message.content ||
+                      (item.replied_message.media_type === "image"
+                        ? "📷 Фото"
+                        : item.replied_message.media_type === "video"
+                          ? "📹 Видео"
+                          : "🎵 Аудио")}
+                  </Text>
+                </TouchableOpacity>
+              )}
 
-            {/* Media content */}
-            {item.media_url && item.media_type === "image" && (
-              <TouchableOpacity
-                activeOpacity={0.9}
-                onPress={() =>
-                  setFullscreenMedia({ url: item.media_url!, type: "image" })
-                }
-              >
-                <Image
-                  source={{ uri: item.media_url }}
-                  style={styles.mediaImage}
-                  resizeMode="cover"
-                />
-              </TouchableOpacity>
-            )}
-            {item.media_url &&
-              item.media_type === "video" &&
-              Platform.OS !== "web" && (
+              {/* Media content */}
+              {item.media_url && item.media_type === "image" && (
                 <TouchableOpacity
                   activeOpacity={0.9}
                   onPress={() =>
-                    setFullscreenMedia({ url: item.media_url!, type: "video" })
+                    setFullscreenMedia({ url: item.media_url!, type: "image" })
                   }
                 >
-                  <Video
+                  <Image
                     source={{ uri: item.media_url }}
-                    style={styles.mediaVideo}
-                    useNativeControls
-                    resizeMode={ResizeMode.CONTAIN}
-                    isLooping={false}
+                    style={styles.mediaImage}
+                    resizeMode="cover"
                   />
                 </TouchableOpacity>
               )}
-            {item.media_url &&
-              item.media_type === "video" &&
-              Platform.OS === "web" && (
-                <View style={styles.mediaVideo}>
-                  <Text style={{ color: colors.textMuted }}>
-                    Видео (откройте в приложении)
-                  </Text>
-                </View>
-              )}
-            {item.media_url && item.media_type === "audio" && (
-              <TouchableOpacity
-                style={[
-                  styles.audioContainer,
-                  isMyMessage
-                    ? styles.myAudioContainer
-                    : styles.otherAudioContainer,
-                ]}
-                onPress={() => playAudio(item.id, item.media_url!)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.audioPlayButton}>
-                  <Ionicons
-                    name={playingAudioId === item.id ? "pause" : "play"}
-                    size={20}
-                    color={colors.textLight}
-                  />
-                </View>
-                <View style={styles.audioWaveform}>
-                  {[...Array(20)].map((_, i) => (
-                    <View
-                      key={i}
-                      style={[
-                        styles.audioWaveBar,
-                        { height: 4 + Math.random() * 16 },
-                        isMyMessage
-                          ? styles.myAudioWaveBar
-                          : styles.otherAudioWaveBar,
-                        playingAudioId === item.id && styles.audioWaveBarActive,
-                      ]}
+              {item.media_url &&
+                item.media_type === "video" &&
+                Platform.OS !== "web" && (
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    onPress={() =>
+                      setFullscreenMedia({
+                        url: item.media_url!,
+                        type: "video",
+                      })
+                    }
+                  >
+                    <Video
+                      source={{ uri: item.media_url }}
+                      style={styles.mediaVideo}
+                      useNativeControls
+                      resizeMode={ResizeMode.CONTAIN}
+                      isLooping={false}
                     />
-                  ))}
-                </View>
+                  </TouchableOpacity>
+                )}
+              {item.media_url &&
+                item.media_type === "video" &&
+                Platform.OS === "web" && (
+                  <View style={styles.mediaVideo}>
+                    <Text style={{ color: colors.textMuted }}>
+                      Видео (откройте в приложении)
+                    </Text>
+                  </View>
+                )}
+              {item.media_url && item.media_type === "audio" && (
+                <TouchableOpacity
+                  style={[
+                    styles.audioContainer,
+                    isMyMessage
+                      ? styles.myAudioContainer
+                      : styles.otherAudioContainer,
+                  ]}
+                  onPress={() => playAudio(item.id, item.media_url!)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.audioPlayButton}>
+                    <Ionicons
+                      name={playingAudioId === item.id ? "pause" : "play"}
+                      size={20}
+                      color={colors.textLight}
+                    />
+                  </View>
+                  <View style={styles.audioWaveform}>
+                    {[...Array(20)].map((_, i) => (
+                      <View
+                        key={i}
+                        style={[
+                          styles.audioWaveBar,
+                          { height: 4 + Math.random() * 16 },
+                          isMyMessage
+                            ? styles.myAudioWaveBar
+                            : styles.otherAudioWaveBar,
+                          playingAudioId === item.id &&
+                            styles.audioWaveBarActive,
+                        ]}
+                      />
+                    ))}
+                  </View>
+                  <Text
+                    style={[
+                      styles.audioDuration,
+                      isMyMessage
+                        ? styles.myAudioDuration
+                        : styles.otherAudioDuration,
+                    ]}
+                  >
+                    0:30
+                  </Text>
+                </TouchableOpacity>
+              )}
+              {/* Text content */}
+              {item.content ? (
                 <Text
                   style={[
-                    styles.audioDuration,
+                    styles.messageText,
                     isMyMessage
-                      ? styles.myAudioDuration
-                      : styles.otherAudioDuration,
+                      ? styles.myMessageText
+                      : styles.otherMessageText,
                   ]}
                 >
-                  0:30
+                  {item.content}
                 </Text>
-              </TouchableOpacity>
-            )}
-            {/* Text content */}
-            {item.content ? (
+              ) : null}
               <Text
                 style={[
-                  styles.messageText,
-                  isMyMessage ? styles.myMessageText : styles.otherMessageText,
+                  styles.messageTime,
+                  isMyMessage ? styles.myMessageTime : styles.otherMessageTime,
                 ]}
               >
-                {item.content}
+                {formatMessageTime(item.created_at)}
+                {isMyMessage && (
+                  <Text style={{ marginLeft: 4 }}>
+                    {" "}
+                    <Ionicons
+                      name={item.is_read ? "checkmark-done" : "checkmark"}
+                      size={14}
+                      color={item.is_read ? "#4FC3F7" : colors.messageTime}
+                    />
+                  </Text>
+                )}
               </Text>
-            ) : null}
-            <Text
-              style={[
-                styles.messageTime,
-                isMyMessage ? styles.myMessageTime : styles.otherMessageTime,
-              ]}
-            >
-              {formatMessageTime(item.created_at)}
-              {isMyMessage && (
-                <Text style={{ marginLeft: 4 }}>
-                  {" "}
-                  <Ionicons
-                    name={item.is_read ? "checkmark-done" : "checkmark"}
-                    size={14}
-                    color={item.is_read ? "#4FC3F7" : colors.messageTime}
-                  />
-                </Text>
+              {item.updated_at && item.updated_at !== item.created_at && (
+                <Text style={styles.editedLabel}>изменено</Text>
               )}
-            </Text>
-            {item.updated_at && item.updated_at !== item.created_at && (
-              <Text style={styles.editedLabel}>изменено</Text>
-            )}
-          </View>
-        </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Animated.View>
       </>
     );
   };
@@ -1360,6 +1689,143 @@ export default function ChatScreen() {
 
       {/* Messages */}
       <View style={styles.messagesContainer}>
+        {/* Pinned Messages Bar */}
+        {pinnedMessages.length > 0 && (
+          <Animated.View
+            style={[
+              styles.pinnedBar,
+              {
+                opacity: pinnedAnimation,
+                transform: [
+                  {
+                    translateY: pinnedAnimation.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [-60, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            {/* Navigation arrows for multiple pins */}
+            {pinnedMessages.length > 1 && (
+              <View style={styles.pinnedNavigation}>
+                <TouchableOpacity
+                  style={styles.pinnedNavButton}
+                  onPress={() => navigatePinnedMessage("prev")}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons
+                    name="chevron-up"
+                    size={18}
+                    color={colors.primary}
+                  />
+                </TouchableOpacity>
+                <Text style={styles.pinnedCounter}>
+                  {currentPinnedIndex + 1}/{pinnedMessages.length}
+                </Text>
+                <TouchableOpacity
+                  style={styles.pinnedNavButton}
+                  onPress={() => navigatePinnedMessage("next")}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons
+                    name="chevron-down"
+                    size={18}
+                    color={colors.primary}
+                  />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.pinnedContent}
+              onPress={() => scrollToPinnedMessage()}
+              activeOpacity={0.7}
+            >
+              <View
+                style={[
+                  styles.pinnedIconContainer,
+                  pinnedMessages[currentPinnedIndex]?.isPersonal &&
+                    styles.pinnedIconPersonal,
+                ]}
+              >
+                <Ionicons
+                  name="bookmark"
+                  size={16}
+                  color={
+                    pinnedMessages[currentPinnedIndex]?.isPersonal
+                      ? "#FF9500"
+                      : colors.primary
+                  }
+                />
+              </View>
+              <View style={styles.pinnedTextContainer}>
+                <Text style={styles.pinnedLabel}>
+                  {pinnedMessages[currentPinnedIndex]?.isPersonal
+                    ? "Закреплено для вас"
+                    : "Закреплённое сообщение"}
+                </Text>
+                <Text style={styles.pinnedMessageText} numberOfLines={1}>
+                  {pinnedMessages[currentPinnedIndex]?.message.content ||
+                    (pinnedMessages[currentPinnedIndex]?.message.media_type ===
+                    "image"
+                      ? "📷 Фото"
+                      : pinnedMessages[currentPinnedIndex]?.message
+                            .media_type === "video"
+                        ? "🎬 Видео"
+                        : pinnedMessages[currentPinnedIndex]?.message
+                              .media_type === "audio"
+                          ? "🎵 Аудио"
+                          : "Сообщение")}
+                </Text>
+              </View>
+              {pinnedMessages[currentPinnedIndex]?.message.sender
+                ?.avatar_url ? (
+                <Image
+                  source={{
+                    uri: pinnedMessages[currentPinnedIndex]?.message.sender
+                      ?.avatar_url,
+                  }}
+                  style={styles.pinnedAvatar}
+                />
+              ) : (
+                <View
+                  style={[
+                    styles.pinnedAvatarPlaceholder,
+                    {
+                      backgroundColor: getAvatarColor(
+                        pinnedMessages[currentPinnedIndex]?.message.sender_id ||
+                          "",
+                      ),
+                    },
+                  ]}
+                >
+                  <Text style={styles.pinnedAvatarText}>
+                    {pinnedMessages[
+                      currentPinnedIndex
+                    ]?.message.sender?.username
+                      ?.charAt(0)
+                      .toUpperCase() || "?"}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.pinnedCloseButton}
+              onPress={() => {
+                const current = pinnedMessages[currentPinnedIndex];
+                if (current) {
+                  unpinMessage(current.message.id, current.isPersonal);
+                }
+              }}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="close" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </Animated.View>
+        )}
+
         <FlatList
           ref={flatListRef}
           data={messages}
@@ -1865,6 +2331,45 @@ export default function ChatScreen() {
                       </Text>
                     </TouchableOpacity>
                   )}
+
+                  {/* Закрепить/Открепить */}
+                  <TouchableOpacity
+                    style={styles.menuActionItem}
+                    onPress={() => handleMenuAction("pin")}
+                    activeOpacity={0.7}
+                  >
+                    <View
+                      style={[
+                        styles.menuActionIcon,
+                        {
+                          backgroundColor: pinnedMessages.some(
+                            (p) => p.message.id === selectedMessage.id,
+                          )
+                            ? "#FF9500"
+                            : "#007AFF",
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={
+                          pinnedMessages.some(
+                            (p) => p.message.id === selectedMessage.id,
+                          )
+                            ? "bookmark"
+                            : "bookmark-outline"
+                        }
+                        size={22}
+                        color="#fff"
+                      />
+                    </View>
+                    <Text style={styles.menuActionText}>
+                      {pinnedMessages.some(
+                        (p) => p.message.id === selectedMessage.id,
+                      )
+                        ? "Открепить"
+                        : "Закрепить"}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
 
                 {/* Cancel Button */}
@@ -1877,6 +2382,89 @@ export default function ChatScreen() {
                 </TouchableOpacity>
               </>
             )}
+          </Animated.View>
+        </Pressable>
+      </Modal>
+
+      {/* Pin Options Modal */}
+      <Modal
+        visible={showPinOptions}
+        transparent
+        animationType="none"
+        onRequestClose={hidePinOptionsMenu}
+      >
+        <Pressable style={styles.menuOverlay} onPress={hidePinOptionsMenu}>
+          <Animated.View
+            style={[
+              styles.pinOptionsContainer,
+              {
+                transform: [
+                  {
+                    scale: pinOptionsAnimation.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.9, 1],
+                    }),
+                  },
+                ],
+                opacity: pinOptionsAnimation,
+              },
+            ]}
+          >
+            <View style={styles.pinOptionsHeader}>
+              <Ionicons name="bookmark" size={28} color={colors.primary} />
+              <Text style={styles.pinOptionsTitle}>Закрепить сообщение</Text>
+            </View>
+
+            <Text style={styles.pinOptionsDescription}>
+              Выберите, кто увидит закреплённое сообщение
+            </Text>
+
+            <TouchableOpacity
+              style={styles.pinOptionButton}
+              onPress={() => handlePinOption(false)}
+              activeOpacity={0.7}
+            >
+              <View
+                style={[
+                  styles.pinOptionIcon,
+                  { backgroundColor: colors.primary },
+                ]}
+              >
+                <Ionicons name="people" size={22} color="#fff" />
+              </View>
+              <View style={styles.pinOptionTextContainer}>
+                <Text style={styles.pinOptionTitle}>Для всех</Text>
+                <Text style={styles.pinOptionSubtitle}>
+                  Все участники увидят это закреплённое сообщение
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.pinOptionButton}
+              onPress={() => handlePinOption(true)}
+              activeOpacity={0.7}
+            >
+              <View
+                style={[styles.pinOptionIcon, { backgroundColor: "#FF9500" }]}
+              >
+                <Ionicons name="person" size={22} color="#fff" />
+              </View>
+              <View style={styles.pinOptionTextContainer}>
+                <Text style={styles.pinOptionTitle}>Только для меня</Text>
+                <Text style={styles.pinOptionSubtitle}>
+                  Только вы увидите это закреплённое сообщение
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.pinOptionCancelButton}
+              onPress={hidePinOptionsMenu}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.pinOptionCancelText}>Отмена</Text>
+            </TouchableOpacity>
           </Animated.View>
         </Pressable>
       </Modal>
@@ -2813,5 +3401,160 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textSecondary,
     marginLeft: 4,
+  },
+  // Pinned message styles
+  pinnedBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    zIndex: 10,
+  },
+  pinnedContent: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  pinnedIconContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.primaryLight,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pinnedTextContainer: {
+    flex: 1,
+  },
+  pinnedLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.primary,
+    marginBottom: 2,
+  },
+  pinnedMessageText: {
+    fontSize: 14,
+    color: colors.text,
+  },
+  pinnedAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+  },
+  pinnedAvatarPlaceholder: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pinnedAvatarText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.textLight,
+  },
+  pinnedCloseButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.border,
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
+  },
+  // Pinned navigation styles
+  pinnedNavigation: {
+    alignItems: "center",
+    marginRight: 10,
+  },
+  pinnedNavButton: {
+    padding: 2,
+  },
+  pinnedCounter: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.primary,
+    marginVertical: 2,
+  },
+  pinnedIconPersonal: {
+    backgroundColor: "rgba(255, 149, 0, 0.15)",
+  },
+  // Pin options modal styles
+  pinOptionsContainer: {
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    padding: 20,
+    marginHorizontal: 24,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  pinOptionsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+    gap: 10,
+  },
+  pinOptionsTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  pinOptionsDescription: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  pinOptionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.background,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    gap: 14,
+  },
+  pinOptionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pinOptionTextContainer: {
+    flex: 1,
+  },
+  pinOptionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: 3,
+  },
+  pinOptionSubtitle: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  pinOptionCancelButton: {
+    alignItems: "center",
+    paddingVertical: 14,
+    marginTop: 8,
+  },
+  pinOptionCancelText: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: colors.primary,
   },
 });

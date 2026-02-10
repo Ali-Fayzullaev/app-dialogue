@@ -58,6 +58,7 @@ export default function UserProfileScreen() {
   const [fullscreenMedia, setFullscreenMedia] = useState<MediaItem | null>(
     null,
   );
+  const [showAvatarViewer, setShowAvatarViewer] = useState(false);
   const [mediaCount, setMediaCount] = useState({
     images: 0,
     videos: 0,
@@ -503,15 +504,26 @@ export default function UserProfileScreen() {
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* Profile Info */}
         <View style={styles.profileSection}>
-          {profile.avatar_url ? (
-            <Image source={{ uri: profile.avatar_url }} style={styles.avatar} />
-          ) : (
-            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-              <Text style={styles.avatarText}>
-                {profile.username?.charAt(0).toUpperCase() || "?"}
-              </Text>
-            </View>
-          )}
+          <TouchableOpacity
+            onPress={() => {
+              safeHaptic();
+              setShowAvatarViewer(true);
+            }}
+            activeOpacity={0.8}
+          >
+            {profile.avatar_url ? (
+              <Image
+                source={{ uri: profile.avatar_url }}
+                style={styles.avatar}
+              />
+            ) : (
+              <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+                <Text style={styles.avatarText}>
+                  {profile.username?.charAt(0).toUpperCase() || "?"}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
 
           <Text style={styles.username}>{profile.username}</Text>
 
@@ -816,6 +828,49 @@ export default function UserProfileScreen() {
             </TouchableOpacity>
           </Animated.View>
         </Pressable>
+      </Modal>
+
+      {/* Avatar Viewer Modal */}
+      <Modal
+        visible={showAvatarViewer}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAvatarViewer(false)}
+      >
+        <View style={styles.avatarViewerOverlay}>
+          <TouchableOpacity
+            style={styles.avatarViewerCloseButton}
+            onPress={() => setShowAvatarViewer(false)}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+
+          {profile?.avatar_url ? (
+            <Image
+              source={{ uri: profile.avatar_url }}
+              style={styles.avatarViewerImage}
+              resizeMode="contain"
+            />
+          ) : (
+            <View
+              style={[
+                styles.avatarViewerPlaceholder,
+                { backgroundColor: avatarColor },
+              ]}
+            >
+              <Text style={styles.avatarViewerPlaceholderText}>
+                {profile?.username?.charAt(0).toUpperCase() || "?"}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.avatarViewerInfo}>
+            <Text style={styles.avatarViewerName}>{profile?.username}</Text>
+            <Text style={styles.avatarViewerSubtitle}>
+              В приложении с {formatDate(profile?.created_at || "")}
+            </Text>
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -1218,5 +1273,55 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: colors.textSecondary,
+  },
+  // Avatar Viewer
+  avatarViewerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarViewerCloseButton: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 60 : 20,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  avatarViewerImage: {
+    width: "90%",
+    height: "60%",
+    borderRadius: 8,
+  },
+  avatarViewerPlaceholder: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarViewerPlaceholderText: {
+    fontSize: 72,
+    fontWeight: "700",
+    color: colors.textLight,
+  },
+  avatarViewerInfo: {
+    marginTop: 24,
+    alignItems: "center",
+  },
+  avatarViewerName: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#fff",
+    marginBottom: 4,
+  },
+  avatarViewerSubtitle: {
+    fontSize: 15,
+    color: "rgba(255,255,255,0.7)",
   },
 });

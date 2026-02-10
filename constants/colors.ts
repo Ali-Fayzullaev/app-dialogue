@@ -9,8 +9,10 @@ export const colors = {
   background: "#ffffff",
   backgroundSecondary: "#f7f7f8",
   backgroundChat: "#e5ddd5",
+  surface: "#f7f7f8",
 
   // Текст
+  text: "#1a1a1a",
   textPrimary: "#1a1a1a",
   textSecondary: "#8e8e93",
   textLight: "#ffffff",

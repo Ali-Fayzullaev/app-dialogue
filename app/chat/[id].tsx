@@ -12,22 +12,22 @@ import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
-    ActionSheetIOS,
-    ActivityIndicator,
-    Alert,
-    Animated,
-    Dimensions,
-    FlatList,
-    Image,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActionSheetIOS,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Dimensions,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 interface MessageWithSender extends Message {
@@ -70,6 +70,10 @@ export default function ChatScreen() {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [chatName, setChatName] = useState("Чат");
   const [otherUser, setOtherUser] = useState<Profile | null>(null);
+  const [isGroup, setIsGroup] = useState(false);
+  const [memberCount, setMemberCount] = useState(0);
+  const [chatAvatarUrl, setChatAvatarUrl] = useState<string | null>(null);
+  const [showAvatarViewer, setShowAvatarViewer] = useState(false);
   const { user } = useAuth();
   const flatListRef = useRef<FlatList>(null);
   const router = useRouter();
@@ -126,30 +130,40 @@ export default function ChatScreen() {
         .eq("id", id)
         .single();
 
-      if (chat?.name) {
-        setChatName(chat.name);
-        return;
-      }
+      if (!chat) return;
 
+      // Устанавливаем информацию о группе
+      setIsGroup(chat.is_group);
+      setChatAvatarUrl(chat.avatar_url);
+
+      // Получаем участников
       const { data: members } = await supabase
         .from("chat_members")
         .select("user_id")
         .eq("chat_id", id);
 
-      const otherMemberIds =
-        members?.filter((m) => m.user_id !== user.id).map((m) => m.user_id) ||
-        [];
+      setMemberCount(members?.length || 0);
 
-      if (otherMemberIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("*")
-          .in("id", otherMemberIds);
+      if (chat.is_group) {
+        // Для группы используем имя группы
+        setChatName(chat.name || "Группа");
+      } else {
+        // Для личного чата - имя собеседника
+        const otherMemberIds =
+          members?.filter((m) => m.user_id !== user.id).map((m) => m.user_id) ||
+          [];
 
-        if (profiles && profiles.length > 0) {
-          setOtherUser(profiles[0]);
-          const name = profiles.map((p) => p.username).join(", ");
-          setChatName(name);
+        if (otherMemberIds.length > 0) {
+          const { data: profiles } = await supabase
+            .from("profiles")
+            .select("*")
+            .in("id", otherMemberIds);
+
+          if (profiles && profiles.length > 0) {
+            setOtherUser(profiles[0]);
+            const name = profiles.map((p) => p.username).join(", ");
+            setChatName(name);
+          }
         }
       }
     } catch (error) {
@@ -863,6 +877,17 @@ export default function ChatScreen() {
               item.media_url && styles.mediaBubble,
             ]}
           >
+            {/* Sender name for group messages */}
+            {isGroup && !isMyMessage && item.sender && (
+              <Text
+                style={[
+                  styles.senderName,
+                  { color: getAvatarColor(item.sender.id) },
+                ]}
+              >
+                {item.sender.username}
+              </Text>
+            )}
             {/* Replied message quote */}
             {item.replied_message && (
               <TouchableOpacity
@@ -1038,6 +1063,7 @@ export default function ChatScreen() {
   }
 
   const avatarColor = otherUser ? getAvatarColor(otherUser.id) : colors.primary;
+  const groupAvatarColor = id ? getAvatarColor(id) : colors.primary;
 
   return (
     <KeyboardAvoidingView
@@ -1064,46 +1090,107 @@ export default function ChatScreen() {
         <TouchableOpacity
           style={styles.headerProfile}
           onPress={() => {
-            if (otherUser?.id) {
-              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+            safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+            if (isGroup) {
+              router.push(`/group/${id}/settings` as any);
+            } else if (otherUser?.id) {
               router.push(`/profile/${otherUser.id}` as any);
             }
           }}
           activeOpacity={0.7}
         >
-          {otherUser?.avatar_url ? (
-            <View style={styles.avatarWrapper}>
-              <Image
-                source={{ uri: otherUser.avatar_url }}
-                style={styles.headerAvatarImage}
-              />
-              {isOnline && <View style={styles.onlineIndicator} />}
-            </View>
-          ) : (
-            <View style={styles.avatarWrapper}>
-              <View
-                style={[styles.headerAvatar, { backgroundColor: avatarColor }]}
-              >
-                <Text style={styles.headerAvatarText}>
-                  {chatName.charAt(0).toUpperCase()}
-                </Text>
+          {/* Avatar - открывает просмотр */}
+          <TouchableOpacity
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              const hasAvatar = isGroup
+                ? !!chatAvatarUrl
+                : !!otherUser?.avatar_url;
+              if (hasAvatar || !isGroup) {
+                setShowAvatarViewer(true);
+              }
+            }}
+            activeOpacity={0.8}
+          >
+            {isGroup ? (
+              // Аватар группы
+              <View style={styles.avatarWrapper}>
+                {chatAvatarUrl ? (
+                  <Image
+                    source={{ uri: chatAvatarUrl }}
+                    style={styles.headerAvatarImage}
+                  />
+                ) : (
+                  <View
+                    style={[
+                      styles.headerAvatar,
+                      { backgroundColor: groupAvatarColor },
+                    ]}
+                  >
+                    <Ionicons
+                      name="people"
+                      size={20}
+                      color={colors.textLight}
+                    />
+                  </View>
+                )}
               </View>
-              {isOnline && <View style={styles.onlineIndicator} />}
-            </View>
-          )}
+            ) : otherUser?.avatar_url ? (
+              <View style={styles.avatarWrapper}>
+                <Image
+                  source={{ uri: otherUser.avatar_url }}
+                  style={styles.headerAvatarImage}
+                />
+                {isOnline && <View style={styles.onlineIndicator} />}
+              </View>
+            ) : (
+              <View style={styles.avatarWrapper}>
+                <View
+                  style={[
+                    styles.headerAvatar,
+                    { backgroundColor: avatarColor },
+                  ]}
+                >
+                  <Text style={styles.headerAvatarText}>
+                    {chatName.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+                {isOnline && <View style={styles.onlineIndicator} />}
+              </View>
+            )}
+          </TouchableOpacity>
 
           <View style={styles.headerInfo}>
             <Text style={styles.headerName}>{chatName}</Text>
             <Text
               style={[
                 styles.headerStatus,
-                isOnline && styles.headerStatusOnline,
+                !isGroup && isOnline && styles.headerStatusOnline,
               ]}
             >
-              {formatLastSeen()}
+              {isGroup
+                ? `${memberCount} участник${memberCount === 1 ? "" : memberCount < 5 ? "а" : "ов"}`
+                : formatLastSeen()}
             </Text>
           </View>
         </TouchableOpacity>
+
+        {/* Кнопка настроек для групп */}
+        {isGroup && (
+          <TouchableOpacity
+            style={styles.headerSettingsButton}
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              router.push(`/group/${id}/settings` as any);
+            }}
+          >
+            <Ionicons
+              name="settings-outline"
+              size={22}
+              color={colors.textLight}
+            />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Messages */}
@@ -1195,7 +1282,6 @@ export default function ChatScreen() {
       {/* Reply indicator */}
       {replyingTo && !editingMessage && (
         <View style={styles.replyContainer}>
-          <View style={styles.replyBar} />
           <View style={styles.replyInfo}>
             <Text style={styles.replyLabel}>
               Ответ для {replyingTo.sender?.username || "Пользователь"}
@@ -1605,6 +1691,99 @@ export default function ChatScreen() {
           )}
         </View>
       </Modal>
+
+      {/* Avatar Viewer Modal */}
+      <Modal
+        visible={showAvatarViewer}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAvatarViewer(false)}
+      >
+        <View style={styles.avatarViewerOverlay}>
+          <TouchableOpacity
+            style={styles.avatarViewerCloseButton}
+            onPress={() => setShowAvatarViewer(false)}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+
+          {isGroup ? (
+            chatAvatarUrl ? (
+              <Image
+                source={{ uri: chatAvatarUrl }}
+                style={styles.avatarViewerImage}
+                resizeMode="contain"
+              />
+            ) : (
+              <View
+                style={[
+                  styles.avatarViewerPlaceholder,
+                  { backgroundColor: groupAvatarColor },
+                ]}
+              >
+                <Ionicons name="people" size={80} color={colors.textLight} />
+              </View>
+            )
+          ) : otherUser?.avatar_url ? (
+            <Image
+              source={{ uri: otherUser.avatar_url }}
+              style={styles.avatarViewerImage}
+              resizeMode="contain"
+            />
+          ) : (
+            <View
+              style={[
+                styles.avatarViewerPlaceholder,
+                { backgroundColor: avatarColor },
+              ]}
+            >
+              <Text style={styles.avatarViewerPlaceholderText}>
+                {chatName.charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.avatarViewerInfo}>
+            <Text style={styles.avatarViewerName}>{chatName}</Text>
+            {isGroup ? (
+              <Text style={styles.avatarViewerSubtitle}>
+                {memberCount} участник
+                {memberCount === 1 ? "" : memberCount < 5 ? "а" : "ов"}
+              </Text>
+            ) : (
+              <Text
+                style={[
+                  styles.avatarViewerSubtitle,
+                  isOnline && { color: "#81C784" },
+                ]}
+              >
+                {formatLastSeen()}
+              </Text>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={styles.avatarViewerActionButton}
+            onPress={() => {
+              setShowAvatarViewer(false);
+              if (isGroup) {
+                router.push(`/group/${id}/settings` as any);
+              } else if (otherUser?.id) {
+                router.push(`/profile/${otherUser.id}` as any);
+              }
+            }}
+          >
+            <Ionicons
+              name={isGroup ? "settings-outline" : "person-outline"}
+              size={20}
+              color="#fff"
+            />
+            <Text style={styles.avatarViewerActionText}>
+              {isGroup ? "Настройки группы" : "Открыть профиль"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -1689,6 +1868,13 @@ const styles = StyleSheet.create({
     color: "#81C784",
     fontWeight: "500",
   },
+  headerSettingsButton: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
+  },
   messagesContainer: {
     flex: 1,
   },
@@ -1735,6 +1921,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
+  },
+  senderName: {
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 4,
   },
   messageText: {
     fontSize: 16,
@@ -2015,15 +2206,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  replyBar: {
-    width: 3,
-    height: "100%",
-    backgroundColor: "#FF9500",
-    borderRadius: 2,
-    marginRight: 10,
-  },
   replyInfo: {
     flex: 1,
+    borderLeftWidth: 3,
+    borderLeftColor: "#FF9500",
+    paddingLeft: 10,
   },
   replyLabel: {
     fontSize: 13,
@@ -2274,5 +2461,71 @@ const styles = StyleSheet.create({
   fullscreenVideo: {
     width: Dimensions.get("window").width,
     height: Dimensions.get("window").height * 0.7,
+  },
+  // Avatar Viewer
+  avatarViewerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarViewerCloseButton: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 60 : 20,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  avatarViewerImage: {
+    width: "90%",
+    height: "60%",
+    borderRadius: 8,
+  },
+  avatarViewerPlaceholder: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarViewerPlaceholderText: {
+    fontSize: 72,
+    fontWeight: "700",
+    color: colors.textLight,
+  },
+  avatarViewerInfo: {
+    marginTop: 24,
+    alignItems: "center",
+  },
+  avatarViewerName: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#fff",
+    marginBottom: 4,
+  },
+  avatarViewerSubtitle: {
+    fontSize: 15,
+    color: "rgba(255,255,255,0.7)",
+  },
+  avatarViewerActionButton: {
+    position: "absolute",
+    bottom: Platform.OS === "ios" ? 60 : 30,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 24,
+    gap: 8,
+  },
+  avatarViewerActionText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff",
   },
 });

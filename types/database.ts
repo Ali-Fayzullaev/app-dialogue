@@ -36,18 +36,27 @@ export interface Database {
           name: string | null;
           is_group: boolean;
           created_at: string;
+          admin_id: string | null;
+          avatar_url: string | null;
+          description: string | null;
         };
         Insert: {
           id?: string;
           name?: string | null;
           is_group?: boolean;
           created_at?: string;
+          admin_id?: string | null;
+          avatar_url?: string | null;
+          description?: string | null;
         };
         Update: {
           id?: string;
           name?: string | null;
           is_group?: boolean;
           created_at?: string;
+          admin_id?: string | null;
+          avatar_url?: string | null;
+          description?: string | null;
         };
         Relationships: [];
       };
@@ -57,18 +66,21 @@ export interface Database {
           chat_id: string;
           user_id: string;
           joined_at: string;
+          role: "admin" | "member";
         };
         Insert: {
           id?: string;
           chat_id: string;
           user_id: string;
           joined_at?: string;
+          role?: "admin" | "member";
         };
         Update: {
           id?: string;
           chat_id?: string;
           user_id?: string;
           joined_at?: string;
+          role?: "admin" | "member";
         };
         Relationships: [];
       };
@@ -169,6 +181,14 @@ export type Chat = Database["public"]["Tables"]["chats"]["Row"];
 export type ChatMember = Database["public"]["Tables"]["chat_members"]["Row"];
 export type Message = Database["public"]["Tables"]["messages"]["Row"];
 
+// Роль участника в чате
+export type ChatRole = "admin" | "member";
+
+// Участник чата с профилем
+export interface ChatMemberWithProfile extends ChatMember {
+  profile: Profile;
+}
+
 // Расширенный тип сообщения с информацией о профиле отправителя
 export interface MessageWithSender extends Message {
   sender: Profile;
@@ -178,4 +198,13 @@ export interface MessageWithSender extends Message {
 export interface ChatWithDetails extends Chat {
   last_message?: Message;
   members: Profile[];
+  member_count?: number;
+  unread_count?: number;
+}
+
+// Группа с полной информацией
+export interface GroupChatDetails extends Chat {
+  members: ChatMemberWithProfile[];
+  member_count: number;
+  is_admin: boolean;
 }

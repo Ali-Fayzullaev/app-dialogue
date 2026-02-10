@@ -5,16 +5,20 @@ import { Chat, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
-  FlatList,
-  Image,
-  RefreshControl,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Animated,
+    FlatList,
+    Image,
+    Modal,
+    Platform,
+    Pressable,
+    RefreshControl,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 
 interface ChatItem extends Chat {
@@ -27,8 +31,56 @@ interface ChatItem extends Chat {
 export default function ChatsScreen() {
   const [chats, setChats] = useState<ChatItem[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [showFabMenu, setShowFabMenu] = useState(false);
+  const [viewingAvatar, setViewingAvatar] = useState<{
+    url: string | null;
+    name: string;
+    isGroup: boolean;
+    isOnline?: boolean;
+    color: string;
+  } | null>(null);
+  const fabRotation = useRef(new Animated.Value(0)).current;
+  const menuScale = useRef(new Animated.Value(0)).current;
   const { user } = useAuth();
   const router = useRouter();
+
+  const toggleFabMenu = () => {
+    if (Platform.OS !== "web") {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+
+    const toValue = showFabMenu ? 0 : 1;
+    Animated.parallel([
+      Animated.spring(fabRotation, {
+        toValue,
+        useNativeDriver: true,
+        tension: 100,
+        friction: 10,
+      }),
+      Animated.spring(menuScale, {
+        toValue,
+        useNativeDriver: true,
+        tension: 100,
+        friction: 10,
+      }),
+    ]).start();
+
+    setShowFabMenu(!showFabMenu);
+  };
+
+  const closeFabMenu = () => {
+    Animated.parallel([
+      Animated.spring(fabRotation, {
+        toValue: 0,
+        useNativeDriver: true,
+      }),
+      Animated.spring(menuScale, {
+        toValue: 0,
+        useNativeDriver: true,
+      }),
+    ]).start();
+    setShowFabMenu(false);
+  };
 
   const fetchChats = async () => {
     if (!user) return;
@@ -167,13 +219,31 @@ export default function ChatsScreen() {
 
   const renderChat = ({ item }: { item: ChatItem }) => {
     const otherMember = getOtherMember(item);
-    const avatarColor = otherMember
-      ? getAvatarColor(otherMember.id)
-      : colors.primary;
+    const isGroup = item.is_group;
+    const avatarColor = isGroup
+      ? "#FF9500"
+      : otherMember
+        ? getAvatarColor(otherMember.id)
+        : colors.primary;
 
     const handlePress = () => {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (Platform.OS !== "web") {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
       router.push(`/chat/${item.id}` as any);
+    };
+
+    const handleAvatarPress = () => {
+      if (Platform.OS !== "web") {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
+      setViewingAvatar({
+        url: isGroup ? item.avatar_url : otherMember?.avatar_url || null,
+        name: getChatName(item),
+        isGroup,
+        isOnline: !isGroup && item.other_user_online,
+        color: avatarColor,
+      });
     };
 
     return (
@@ -182,26 +252,52 @@ export default function ChatsScreen() {
         onPress={handlePress}
         activeOpacity={0.7}
       >
-        <View style={styles.avatarWrapper}>
-          {otherMember?.avatar_url ? (
-            <Image
-              source={{ uri: otherMember.avatar_url }}
-              style={styles.avatarImage}
-            />
-          ) : (
-            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-              <Text style={styles.avatarText}>
-                {getChatName(item).charAt(0).toUpperCase()}
-              </Text>
-            </View>
-          )}
-          {item.other_user_online && <View style={styles.onlineIndicator} />}
-        </View>
+        <TouchableOpacity onPress={handleAvatarPress} activeOpacity={0.8}>
+          <View style={styles.avatarWrapper}>
+            {isGroup ? (
+              // Group avatar
+              item.avatar_url ? (
+                <Image
+                  source={{ uri: item.avatar_url }}
+                  style={styles.avatarImage}
+                />
+              ) : (
+                <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+                  <Ionicons name="people" size={22} color="#fff" />
+                </View>
+              )
+            ) : otherMember?.avatar_url ? (
+              <Image
+                source={{ uri: otherMember.avatar_url }}
+                style={styles.avatarImage}
+              />
+            ) : (
+              <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+                <Text style={styles.avatarText}>
+                  {getChatName(item).charAt(0).toUpperCase()}
+                </Text>
+              </View>
+            )}
+            {!isGroup && item.other_user_online && (
+              <View style={styles.onlineIndicator} />
+            )}
+          </View>
+        </TouchableOpacity>
         <View style={styles.chatInfo}>
           <View style={styles.chatHeader}>
-            <Text style={styles.chatName} numberOfLines={1}>
-              {getChatName(item)}
-            </Text>
+            <View style={styles.chatNameRow}>
+              {isGroup && (
+                <Ionicons
+                  name="people"
+                  size={14}
+                  color={colors.textMuted}
+                  style={{ marginRight: 4 }}
+                />
+              )}
+              <Text style={styles.chatName} numberOfLines={1}>
+                {getChatName(item)}
+              </Text>
+            </View>
             <View style={styles.chatHeaderRight}>
               {item.last_message && (
                 <Text
@@ -223,6 +319,9 @@ export default function ChatsScreen() {
               ]}
               numberOfLines={1}
             >
+              {isGroup && item.last_message
+                ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `
+                : ""}
               {item.last_message?.media_type
                 ? item.last_message.media_type === "image"
                   ? "📷 Фото"
@@ -251,16 +350,7 @@ export default function ChatsScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Чаты</Text>
-        <TouchableOpacity
-          style={styles.newChatButton}
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push("/new-chat");
-          }}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="create-outline" size={22} color={colors.primary} />
-        </TouchableOpacity>
+        <View style={{ width: 44 }} />
       </View>
 
       {/* Search Bar (visual) */}
@@ -317,6 +407,128 @@ export default function ChatsScreen() {
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      {/* FAB Button */}
+      <Animated.View
+        style={[
+          styles.fab,
+          {
+            transform: [
+              {
+                rotate: fabRotation.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: ["0deg", "45deg"],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.fabButton}
+          onPress={toggleFabMenu}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="add" size={28} color="#fff" />
+        </TouchableOpacity>
+      </Animated.View>
+
+      {/* FAB Menu */}
+      <Modal visible={showFabMenu} transparent animationType="none">
+        <Pressable style={styles.fabOverlay} onPress={closeFabMenu}>
+          <Animated.View
+            style={[
+              styles.fabMenu,
+              {
+                transform: [{ scale: menuScale }],
+                opacity: menuScale,
+              },
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.fabMenuItem}
+              onPress={() => {
+                closeFabMenu();
+                router.push("/new-chat");
+              }}
+              activeOpacity={0.7}
+            >
+              <View
+                style={[
+                  styles.fabMenuIcon,
+                  { backgroundColor: colors.primary },
+                ]}
+              >
+                <Ionicons name="person" size={20} color="#fff" />
+              </View>
+              <Text style={styles.fabMenuText}>Новый чат</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.fabMenuItem}
+              onPress={() => {
+                closeFabMenu();
+                router.push("/group/create");
+              }}
+              activeOpacity={0.7}
+            >
+              <View
+                style={[styles.fabMenuIcon, { backgroundColor: "#FF9500" }]}
+              >
+                <Ionicons name="people" size={20} color="#fff" />
+              </View>
+              <Text style={styles.fabMenuText}>Новая группа</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </Pressable>
+      </Modal>
+
+      {/* Avatar Viewer Modal */}
+      <Modal
+        visible={!!viewingAvatar}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewingAvatar(null)}
+      >
+        <View style={styles.avatarViewerOverlay}>
+          <TouchableOpacity
+            style={styles.avatarViewerCloseButton}
+            onPress={() => setViewingAvatar(null)}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+
+          {viewingAvatar?.url ? (
+            <Image
+              source={{ uri: viewingAvatar.url }}
+              style={styles.avatarViewerImage}
+              resizeMode="contain"
+            />
+          ) : (
+            <View
+              style={[
+                styles.avatarViewerPlaceholder,
+                { backgroundColor: viewingAvatar?.color || colors.primary },
+              ]}
+            >
+              {viewingAvatar?.isGroup ? (
+                <Ionicons name="people" size={80} color="#fff" />
+              ) : (
+                <Text style={styles.avatarViewerPlaceholderText}>
+                  {viewingAvatar?.name?.charAt(0).toUpperCase()}
+                </Text>
+              )}
+            </View>
+          )}
+
+          <View style={styles.avatarViewerInfo}>
+            <Text style={styles.avatarViewerName}>{viewingAvatar?.name}</Text>
+            {viewingAvatar?.isOnline && (
+              <Text style={styles.avatarViewerSubtitleOnline}>В сети</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -418,6 +630,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 6,
   },
+  chatNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
   chatName: {
     fontSize: 17,
     fontWeight: "600",
@@ -508,5 +725,114 @@ const styles = StyleSheet.create({
     color: colors.textLight,
     fontSize: 16,
     fontWeight: "600",
+  },
+  // FAB styles
+  fab: {
+    position: "absolute",
+    bottom: 24,
+    right: 20,
+    zIndex: 100,
+  },
+  fabButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  fabOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    justifyContent: "flex-end",
+    alignItems: "flex-end",
+    paddingBottom: 90,
+    paddingRight: 20,
+  },
+  fabMenu: {
+    backgroundColor: colors.background,
+    borderRadius: 16,
+    paddingVertical: 8,
+    minWidth: 180,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  fabMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  fabMenuIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  fabMenuText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: colors.text,
+  },
+  // Avatar Viewer
+  avatarViewerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarViewerCloseButton: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 60 : 20,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  avatarViewerImage: {
+    width: "90%",
+    height: "60%",
+    borderRadius: 8,
+  },
+  avatarViewerPlaceholder: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarViewerPlaceholderText: {
+    fontSize: 72,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  avatarViewerInfo: {
+    marginTop: 24,
+    alignItems: "center",
+  },
+  avatarViewerName: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#fff",
+    marginBottom: 4,
+  },
+  avatarViewerSubtitleOnline: {
+    fontSize: 15,
+    color: "#81C784",
+    fontWeight: "500",
   },
 });

@@ -1,32 +1,33 @@
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import {
-    acceptCall,
-    Call,
-    declineCall,
-    endCall,
-    formatCallDuration,
+  acceptCall,
+  Call,
+  declineCall,
+  endCall,
+  formatCallDuration,
 } from "@/lib/call-service";
+import { soundService } from "@/lib/sound-service";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { RealtimeChannel } from "@supabase/supabase-js";
-import { BlurView } from "expo-blur";
+import { Audio } from "expo-av";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import * as Linking from "expo-linking";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-    Alert,
-    Animated,
-    Dimensions,
-    Platform,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  Animated,
+  Dimensions,
+  Platform,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { WebView } from "react-native-webview";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -67,6 +68,7 @@ export default function CallScreen() {
   const isIncoming = getStringParam(params.isIncoming);
   const callerName = getStringParam(params.callerName);
   const router = useRouter();
+  const navigation = useNavigation();
   const { user } = useAuth();
   const { colors, isDark } = useTheme();
 
@@ -74,22 +76,44 @@ export default function CallScreen() {
     "connecting" | "ringing" | "active" | "ended"
   >(isIncoming === "true" ? "ringing" : "connecting");
   const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(callType === "audio");
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
   const [callDuration, setCallDuration] = useState(0);
   const [call, setCall] = useState<Call | null>(null);
   const [joinUrl, setJoinUrl] = useState<string | null>(null);
   const [otherUserName, setOtherUserName] = useState<string>(callerName || "");
+  const [isConnected, setIsConnected] = useState(false);
 
   const durationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const ringAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const ring1Anim = useRef(new Animated.Value(0)).current;
   const ring2Anim = useRef(new Animated.Value(0)).current;
   const ring3Anim = useRef(new Animated.Value(0)).current;
-  const webViewRef = useRef<WebView>(null);
+
+  // Безопасная навигация назад
+  const safeGoBack = useCallback(() => {
+    if (navigation.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/(tabs)");
+    }
+  }, [navigation, router]);
+
+  // Настройка аудио для звонка
+  const setupAudio = useCallback(async () => {
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: !isSpeakerOn,
+      });
+    } catch (error) {
+      console.error("Error setting up audio:", error);
+    }
+  }, [isSpeakerOn]);
 
   // Анимация появления
   useEffect(() => {
@@ -172,7 +196,7 @@ export default function CallScreen() {
       if (error || !data) {
         console.error("Failed to load call:", error);
         Alert.alert("Ошибка", "Не удалось загрузить звонок");
-        router.back();
+        safeGoBack();
         return;
       }
 
@@ -192,11 +216,21 @@ export default function CallScreen() {
         }
       }
 
-      // Если это исходящий звонок и есть roomUrl и token - сразу подключаемся
+      // Если это исходящий звонок и есть roomUrl и token - подключаемся
       if (isIncoming !== "true" && roomUrl && token) {
-        setJoinUrl(`${roomUrl}?t=${token}`);
+        const url = `${roomUrl}?t=${token}`;
+        setJoinUrl(url);
         setCallState("active");
+        setIsConnected(true);
         startDurationTimer();
+        await setupAudio();
+        
+        // Автоматически открываем браузер для исходящего звонка
+        try {
+          await Linking.openURL(url);
+        } catch (e) {
+          console.error("Failed to open browser:", e);
+        }
       }
     };
 
@@ -223,7 +257,9 @@ export default function CallScreen() {
 
           if (updatedCall.status === "active" && callState !== "active") {
             setCallState("active");
+            setIsConnected(true);
             startDurationTimer();
+            setupAudio();
           } else if (
             updatedCall.status === "ended" ||
             updatedCall.status === "declined" ||
@@ -231,7 +267,8 @@ export default function CallScreen() {
           ) {
             setCallState("ended");
             stopDurationTimer();
-            setTimeout(() => router.back(), 1500);
+            soundService.stopAllSounds();
+            setTimeout(() => safeGoBack(), 1500);
           }
         },
       )
@@ -242,7 +279,7 @@ export default function CallScreen() {
         supabase.removeChannel(channelRef.current);
       }
     };
-  }, [id]);
+  }, [id, safeGoBack]);
 
   // Таймер длительности звонка
   const startDurationTimer = useCallback(() => {
@@ -260,24 +297,39 @@ export default function CallScreen() {
   }, []);
 
   useEffect(() => {
-    return () => stopDurationTimer();
+    return () => {
+      stopDurationTimer();
+      soundService.stopAllSounds();
+    };
   }, []);
 
   // Принять входящий звонок
   const handleAcceptCall = async () => {
     if (!id || !user) return;
     safeHaptic();
+    soundService.stopRingtone();
 
     setCallState("connecting");
 
     const result = await acceptCall(id, user.id);
     if (result) {
-      setJoinUrl(`${result.roomUrl}?t=${result.token}`);
+      const url = `${result.roomUrl}?t=${result.token}`;
+      setJoinUrl(url);
       setCallState("active");
+      setIsConnected(true);
       startDurationTimer();
+      await setupAudio();
+      
+      // Автоматически открываем браузер для видео/аудио звонка
+      // так как WebRTC не работает в Expo Go
+      try {
+        await Linking.openURL(url);
+      } catch (e) {
+        console.error("Failed to open browser:", e);
+      }
     } else {
       Alert.alert("Ошибка", "Не удалось подключиться к звонку");
-      router.back();
+      safeGoBack();
     }
   };
 
@@ -285,9 +337,10 @@ export default function CallScreen() {
   const handleDeclineCall = async () => {
     if (!id) return;
     safeHaptic(Haptics.ImpactFeedbackStyle.Heavy);
+    soundService.stopRingtone();
 
     await declineCall(id);
-    router.back();
+    safeGoBack();
   };
 
   // Завершить звонок
@@ -298,96 +351,41 @@ export default function CallScreen() {
     stopDurationTimer();
     setCallState("ended");
     await endCall(id);
-    setTimeout(() => router.back(), 500);
+    setTimeout(() => safeGoBack(), 500);
   };
 
   // Переключение микрофона
   const toggleMute = () => {
     safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-    const newMuted = !isMuted;
-    setIsMuted(newMuted);
-    // Отправляем команду в WebView (setLocalAudio принимает true для включения)
-    webViewRef.current?.injectJavaScript(`
-      if (window.callFrame) {
-        window.callFrame.setLocalAudio(${!newMuted});
-      }
-      true;
-    `);
-  };
-
-  // Переключение камеры
-  const toggleVideo = () => {
-    safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-    const newVideoOff = !isVideoOff;
-    setIsVideoOff(newVideoOff);
-    // Отправляем команду в WebView (setLocalVideo принимает true для включения)
-    webViewRef.current?.injectJavaScript(`
-      if (window.callFrame) {
-        window.callFrame.setLocalVideo(${!newVideoOff});
-      }
-      true;
-    `);
+    setIsMuted(!isMuted);
+    // В реальном приложении здесь нужно управлять аудио потоком
   };
 
   // Переключение динамика
-  const toggleSpeaker = () => {
+  const toggleSpeaker = async () => {
     safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-    setIsSpeakerOn(!isSpeakerOn);
+    const newSpeakerState = !isSpeakerOn;
+    setIsSpeakerOn(newSpeakerState);
+    
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: !newSpeakerState,
+      });
+    } catch (error) {
+      console.error("Error toggling speaker:", error);
+    }
   };
 
-  // HTML для Daily.co WebView
-  const getDailyHtml = (url: string) => `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { 
-          width: 100%; 
-          height: 100%; 
-          overflow: hidden;
-          background: #000;
-        }
-        #daily-container {
-          width: 100%;
-          height: 100%;
-        }
-      </style>
-      <script crossorigin src="https://unpkg.com/@daily-co/daily-js"></script>
-    </head>
-    <body>
-      <div id="daily-container"></div>
-      <script>
-        window.callFrame = Daily.createFrame(document.getElementById('daily-container'), {
-          iframeStyle: {
-            width: '100%',
-            height: '100%',
-            border: 'none',
-          },
-          showLeaveButton: false,
-          showFullscreenButton: false,
-        });
-        
-        window.callFrame.join({ url: '${url}' })
-          .then(() => {
-            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'joined' }));
-          })
-          .catch((err) => {
-            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', error: err.message }));
-          });
-        
-        window.callFrame.on('left-meeting', () => {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'left' }));
-        });
-        
-        window.callFrame.on('error', (e) => {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', error: e.errorMsg }));
-        });
-      </script>
-    </body>
-    </html>
-  `;
+  // Открыть видеозвонок в браузере (для видео)
+  const openVideoInBrowser = async () => {
+    if (joinUrl) {
+      await Linking.openURL(joinUrl);
+    }
+  };
 
   const styles = StyleSheet.create({
     container: {
@@ -397,14 +395,7 @@ export default function CallScreen() {
     gradientContainer: {
       flex: 1,
     },
-    videoContainer: {
-      flex: 1,
-      backgroundColor: "#1a1a1a",
-    },
-    webview: {
-      flex: 1,
-    },
-    // Общий экран звонка (входящий/исходящий/подключение)
+    // Общий экран звонка
     callScreenContainer: {
       flex: 1,
       alignItems: "center",
@@ -451,6 +442,10 @@ export default function CallScreen() {
       borderWidth: 3,
       borderColor: "rgba(255,255,255,0.2)",
     },
+    callerAvatarActive: {
+      borderColor: "#34C759",
+      borderWidth: 4,
+    },
     avatarText: {
       fontSize: 48,
       fontWeight: "600",
@@ -469,10 +464,32 @@ export default function CallScreen() {
       marginTop: 8,
     },
     callDurationLarge: {
-      fontSize: 18,
-      color: "rgba(255,255,255,0.9)",
-      marginTop: 12,
+      fontSize: 24,
+      color: "#fff",
+      marginTop: 16,
       fontVariant: ["tabular-nums"],
+      fontWeight: "600",
+    },
+    connectedBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: "rgba(52, 199, 89, 0.2)",
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 20,
+      marginTop: 12,
+    },
+    connectedDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: "#34C759",
+      marginRight: 8,
+    },
+    connectedText: {
+      color: "#34C759",
+      fontSize: 14,
+      fontWeight: "600",
     },
     // Нижняя часть с кнопками
     bottomSection: {
@@ -513,30 +530,11 @@ export default function CallScreen() {
       fontWeight: "500",
     },
     // Панель управления для активного звонка
-    controlsOverlay: {
-      position: "absolute",
-      bottom: 0,
-      left: 0,
-      right: 0,
-      paddingBottom: Platform.OS === "ios" ? 50 : 30,
-      paddingTop: 24,
-      paddingHorizontal: 20,
-    },
-    controlsBlur: {
+    controlsContainer: {
+      backgroundColor: "rgba(255,255,255,0.1)",
       borderRadius: 24,
-      overflow: "hidden",
-      paddingVertical: 20,
-      paddingHorizontal: 16,
-    },
-    durationContainer: {
-      alignItems: "center",
-      marginBottom: 24,
-    },
-    durationText: {
-      color: "#fff",
-      fontSize: 17,
-      fontWeight: "600",
-      fontVariant: ["tabular-nums"],
+      paddingVertical: 24,
+      paddingHorizontal: 20,
     },
     controlsRow: {
       flexDirection: "row",
@@ -547,9 +545,9 @@ export default function CallScreen() {
       alignItems: "center",
     },
     controlButton: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
+      width: 60,
+      height: 60,
+      borderRadius: 30,
       justifyContent: "center",
       alignItems: "center",
       backgroundColor: "rgba(255,255,255,0.15)",
@@ -563,9 +561,9 @@ export default function CallScreen() {
       marginTop: 8,
     },
     endCallButton: {
-      width: 68,
-      height: 68,
-      borderRadius: 34,
+      width: 70,
+      height: 70,
+      borderRadius: 35,
       backgroundColor: "#FF3B30",
       justifyContent: "center",
       alignItems: "center",
@@ -600,6 +598,22 @@ export default function CallScreen() {
       fontSize: 16,
       marginTop: 8,
     },
+    // Видео кнопка
+    videoButton: {
+      backgroundColor: "rgba(88, 86, 214, 0.3)",
+      paddingHorizontal: 20,
+      paddingVertical: 12,
+      borderRadius: 25,
+      marginTop: 20,
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    videoButtonText: {
+      color: "#fff",
+      fontSize: 14,
+      fontWeight: "600",
+      marginLeft: 8,
+    },
   });
 
   // Получаем инициалы для аватара
@@ -608,7 +622,7 @@ export default function CallScreen() {
   };
 
   // Рендер кольца анимации
-  const renderRing = (anim: Animated.Value, delay: number) => {
+  const renderRing = (anim: Animated.Value) => {
     const scale = anim.interpolate({
       inputRange: [0, 1],
       outputRange: [1, 2],
@@ -646,17 +660,15 @@ export default function CallScreen() {
         <Animated.View
           style={[styles.callScreenContainer, { opacity: fadeAnim }]}
         >
-          {/* Верхняя часть */}
           <View style={styles.topSection}>
             <Text style={styles.callStatusText}>Входящий звонок</Text>
           </View>
 
-          {/* Центральная часть с аватаром */}
           <View style={styles.centerSection}>
             <View style={styles.avatarContainer}>
-              {renderRing(ring1Anim, 0)}
-              {renderRing(ring2Anim, 600)}
-              {renderRing(ring3Anim, 1200)}
+              {renderRing(ring1Anim)}
+              {renderRing(ring2Anim)}
+              {renderRing(ring3Anim)}
               <Animated.View
                 style={[
                   styles.callerAvatar,
@@ -672,11 +684,10 @@ export default function CallScreen() {
               {callerName || otherUserName || "Неизвестный"}
             </Text>
             <Text style={styles.callTypeLabel}>
-              {callType === "video" ? "Видеозвонок" : "Аудиозвонок"}
+              {callType === "video" ? "📹 Видеозвонок" : "📞 Аудиозвонок"}
             </Text>
           </View>
 
-          {/* Нижняя часть с кнопками */}
           <View style={styles.bottomSection}>
             <View style={styles.incomingButtons}>
               <View style={styles.incomingButtonWrapper}>
@@ -726,17 +737,15 @@ export default function CallScreen() {
         <Animated.View
           style={[styles.callScreenContainer, { opacity: fadeAnim }]}
         >
-          {/* Верхняя часть */}
           <View style={styles.topSection}>
             <Text style={styles.callStatusText}>Вызов...</Text>
           </View>
 
-          {/* Центральная часть с аватаром */}
           <View style={styles.centerSection}>
             <View style={styles.avatarContainer}>
-              {renderRing(ring1Anim, 0)}
-              {renderRing(ring2Anim, 600)}
-              {renderRing(ring3Anim, 1200)}
+              {renderRing(ring1Anim)}
+              {renderRing(ring2Anim)}
+              {renderRing(ring3Anim)}
               <Animated.View
                 style={[
                   styles.callerAvatar,
@@ -750,11 +759,10 @@ export default function CallScreen() {
             </View>
             <Text style={styles.callerName}>{otherUserName || "Вызов..."}</Text>
             <Text style={styles.callTypeLabel}>
-              {callType === "video" ? "Видеозвонок" : "Аудиозвонок"}
+              {callType === "video" ? "📹 Видеозвонок" : "📞 Аудиозвонок"}
             </Text>
           </View>
 
-          {/* Нижняя часть с кнопкой завершения */}
           <View style={styles.bottomSection}>
             <View style={styles.incomingButtons}>
               <View style={styles.incomingButtonWrapper}>
@@ -802,131 +810,120 @@ export default function CallScreen() {
     );
   }
 
-  // Активный звонок с видео
+  // Активный звонок
   return (
-    <View style={styles.container}>
-      {/* Видео через WebView */}
-      {joinUrl && (
-        <View style={styles.videoContainer}>
-          <WebView
-            ref={webViewRef}
-            source={{ html: getDailyHtml(joinUrl) }}
-            style={styles.webview}
-            javaScriptEnabled
-            mediaPlaybackRequiresUserAction={false}
-            allowsInlineMediaPlayback
-            allowsFullscreenVideo
-            onMessage={(event) => {
-              try {
-                const data = JSON.parse(event.nativeEvent.data);
-                if (data.type === "joined") {
-                  console.log("Daily.co call joined successfully");
-                } else if (data.type === "left") {
-                  console.log("Daily.co call left");
-                  handleEndCall();
-                } else if (data.type === "error") {
-                  console.error("Daily.co error:", data.error);
-                  Alert.alert("Ошибка", "Не удалось подключиться к звонку");
-                }
-              } catch (e) {
-                console.log("WebView message:", event.nativeEvent.data);
-              }
-            }}
-          />
+    <LinearGradient
+      colors={
+        isDark
+          ? ["#0f3460", "#16213e", "#1a1a2e"]
+          : ["#34C759", "#30B350", "#28A745"]
+      }
+      style={styles.gradientContainer}
+    >
+      <StatusBar barStyle="light-content" />
+      <View style={styles.callScreenContainer}>
+        <View style={styles.topSection}>
+          <Text style={styles.callStatusText}>
+            {callType === "video" ? "Видеозвонок" : "Аудиозвонок"}
+          </Text>
         </View>
-      )}
 
-      {/* Панель управления */}
-      <View style={styles.controlsOverlay}>
-        <BlurView intensity={80} tint="dark" style={styles.controlsBlur}>
-          {/* Длительность */}
-          <View style={styles.durationContainer}>
-            <Text style={styles.durationText}>
-              {formatCallDuration(callDuration)}
-            </Text>
-          </View>
-
-          {/* Кнопки управления */}
-          <View style={styles.controlsRow}>
-            {/* Микрофон */}
-            <View style={styles.controlButtonWrapper}>
-              <TouchableOpacity
-                style={[
-                  styles.controlButton,
-                  isMuted && styles.controlButtonActive,
-                ]}
-                onPress={toggleMute}
-                activeOpacity={0.7}
-              >
-                <Ionicons
-                  name={isMuted ? "mic-off" : "mic"}
-                  size={24}
-                  color={isMuted ? "#000" : "#fff"}
-                />
-              </TouchableOpacity>
-              <Text style={styles.controlButtonLabel}>
-                {isMuted ? "Вкл" : "Выкл"}
+        <View style={styles.centerSection}>
+          <View style={styles.avatarContainer}>
+            <View style={[styles.callerAvatar, styles.callerAvatarActive]}>
+              <Text style={styles.avatarText}>
+                {getInitials(otherUserName)}
               </Text>
             </View>
+          </View>
+          <Text style={styles.callerName}>{otherUserName}</Text>
+          
+          <View style={styles.connectedBadge}>
+            <View style={styles.connectedDot} />
+            <Text style={styles.connectedText}>Подключено</Text>
+          </View>
 
-            {/* Камера (только для видеозвонка) */}
-            {callType === "video" && (
+          <Text style={styles.callDurationLarge}>
+            {formatCallDuration(callDuration)}
+          </Text>
+
+          {/* Кнопка для открытия видео в браузере */}
+          {callType === "video" && joinUrl && (
+            <TouchableOpacity
+              style={styles.videoButton}
+              onPress={openVideoInBrowser}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="open-outline" size={20} color="#fff" />
+              <Text style={styles.videoButtonText}>Открыть видео</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={styles.bottomSection}>
+          <View style={styles.controlsContainer}>
+            <View style={styles.controlsRow}>
+              {/* Микрофон */}
               <View style={styles.controlButtonWrapper}>
                 <TouchableOpacity
                   style={[
                     styles.controlButton,
-                    isVideoOff && styles.controlButtonActive,
+                    isMuted && styles.controlButtonActive,
                   ]}
-                  onPress={toggleVideo}
+                  onPress={toggleMute}
                   activeOpacity={0.7}
                 >
                   <Ionicons
-                    name={isVideoOff ? "videocam-off" : "videocam"}
-                    size={24}
-                    color={isVideoOff ? "#000" : "#fff"}
+                    name={isMuted ? "mic-off" : "mic"}
+                    size={26}
+                    color={isMuted ? "#000" : "#fff"}
                   />
                 </TouchableOpacity>
-                <Text style={styles.controlButtonLabel}>Камера</Text>
+                <Text style={styles.controlButtonLabel}>
+                  {isMuted ? "Вкл микрофон" : "Выкл микрофон"}
+                </Text>
               </View>
-            )}
 
-            {/* Завершить звонок */}
-            <View style={styles.controlButtonWrapper}>
-              <TouchableOpacity
-                style={styles.endCallButton}
-                onPress={handleEndCall}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="call"
-                  size={28}
-                  color="#fff"
-                  style={{ transform: [{ rotate: "135deg" }] }}
-                />
-              </TouchableOpacity>
-            </View>
+              {/* Завершить звонок */}
+              <View style={styles.controlButtonWrapper}>
+                <TouchableOpacity
+                  style={styles.endCallButton}
+                  onPress={handleEndCall}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name="call"
+                    size={30}
+                    color="#fff"
+                    style={{ transform: [{ rotate: "135deg" }] }}
+                  />
+                </TouchableOpacity>
+              </View>
 
-            {/* Динамик */}
-            <View style={styles.controlButtonWrapper}>
-              <TouchableOpacity
-                style={[
-                  styles.controlButton,
-                  !isSpeakerOn && styles.controlButtonActive,
-                ]}
-                onPress={toggleSpeaker}
-                activeOpacity={0.7}
-              >
-                <Ionicons
-                  name={isSpeakerOn ? "volume-high" : "volume-mute"}
-                  size={24}
-                  color={!isSpeakerOn ? "#000" : "#fff"}
-                />
-              </TouchableOpacity>
-              <Text style={styles.controlButtonLabel}>Динамик</Text>
+              {/* Динамик */}
+              <View style={styles.controlButtonWrapper}>
+                <TouchableOpacity
+                  style={[
+                    styles.controlButton,
+                    !isSpeakerOn && styles.controlButtonActive,
+                  ]}
+                  onPress={toggleSpeaker}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={isSpeakerOn ? "volume-high" : "volume-mute"}
+                    size={26}
+                    color={!isSpeakerOn ? "#000" : "#fff"}
+                  />
+                </TouchableOpacity>
+                <Text style={styles.controlButtonLabel}>
+                  {isSpeakerOn ? "Динамик" : "Наушник"}
+                </Text>
+              </View>
             </View>
           </View>
-        </BlurView>
+        </View>
       </View>
-    </View>
+    </LinearGradient>
   );
 }

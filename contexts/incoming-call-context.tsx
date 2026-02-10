@@ -1,36 +1,37 @@
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import {
-    cancelCallNotification,
-    sendCallNotification,
+  cancelCallNotification,
+  sendCallNotification,
 } from "@/hooks/use-push-notifications";
 import {
-    acceptCall,
-    Call,
-    declineCall,
-    subscribeToCallsForUser,
+  acceptCall,
+  Call,
+  declineCall,
+  subscribeToCallsForUser,
 } from "@/lib/call-service";
+import { soundService } from "@/lib/sound-service";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import React, {
-    createContext,
-    useContext,
-    useEffect,
-    useRef,
-    useState,
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
 } from "react";
 import {
-    Animated,
-    Dimensions,
-    Modal,
-    Platform,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Animated,
+  Dimensions,
+  Modal,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -71,6 +72,7 @@ export function IncomingCallProvider({
   const channelRef = useRef<RealtimeChannel | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const slideAnim = useRef(new Animated.Value(SCREEN_WIDTH)).current;
+  const vibrationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Пульсирующая анимация
   useEffect(() => {
@@ -99,20 +101,36 @@ export function IncomingCallProvider({
         useNativeDriver: true,
       }).start();
 
+      // Воспроизводим рингтон через сервис
+      soundService.playRingtone();
+
       // Вибрация при входящем звонке
       if (Platform.OS !== "web") {
-        const interval = setInterval(() => {
+        vibrationIntervalRef.current = setInterval(() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         }, 1500);
-        return () => {
-          clearInterval(interval);
-          pulse.stop();
-        };
       }
 
-      return () => pulse.stop();
+      return () => {
+        pulse.stop();
+        soundService.stopRingtone();
+        if (vibrationIntervalRef.current) {
+          clearInterval(vibrationIntervalRef.current);
+          vibrationIntervalRef.current = null;
+        }
+      };
     }
   }, [showModal]);
+
+  // Очистка при размонтировании
+  useEffect(() => {
+    return () => {
+      soundService.stopAllSounds();
+      if (vibrationIntervalRef.current) {
+        clearInterval(vibrationIntervalRef.current);
+      }
+    };
+  }, []);
 
   // Подписка на входящие звонки
   useEffect(() => {
@@ -160,6 +178,11 @@ export function IncomingCallProvider({
   }, [user?.id]);
 
   const closeModal = () => {
+    soundService.stopRingtone();
+    if (vibrationIntervalRef.current) {
+      clearInterval(vibrationIntervalRef.current);
+      vibrationIntervalRef.current = null;
+    }
     Animated.timing(slideAnim, {
       toValue: SCREEN_WIDTH,
       duration: 200,
@@ -175,6 +198,7 @@ export function IncomingCallProvider({
   const handleAccept = async () => {
     if (!incomingCall || !user) return;
     safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    soundService.stopRingtone();
 
     const result = await acceptCall(incomingCall.id, user.id);
 
@@ -197,6 +221,7 @@ export function IncomingCallProvider({
   const handleDecline = async () => {
     if (!incomingCall) return;
     safeHaptic(Haptics.ImpactFeedbackStyle.Heavy);
+    soundService.stopRingtone();
 
     await declineCall(incomingCall.id);
     closeModal();

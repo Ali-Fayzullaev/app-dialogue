@@ -4,7 +4,6 @@ import React from "react";
 import { HapticTab } from "@/components/haptic-tab";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useTheme } from "@/contexts/theme-context";
-import { Ionicons } from "@expo/vector-icons";
 
 export default function TabLayout() {
   const { colors } = useTheme();
@@ -28,15 +27,6 @@ export default function TabLayout() {
           title: "Чаты",
           tabBarIcon: ({ color }) => (
             <IconSymbol size={28} name="message.fill" color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="calls"
-        options={{
-          title: "Звонки",
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="call" size={24} color={color} />
           ),
         }}
       />

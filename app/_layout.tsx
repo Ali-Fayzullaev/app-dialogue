@@ -11,7 +11,6 @@ import { ActivityIndicator, View } from "react-native";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/contexts/auth-context";
-import { IncomingCallProvider } from "@/contexts/incoming-call-context";
 import { ThemeProvider, useTheme } from "@/contexts/theme-context";
 import { usePresence } from "@/hooks/use-presence";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
@@ -78,30 +77,24 @@ function RootLayoutNav() {
 
   console.log("Session exists, showing main app");
   return (
-    <IncomingCallProvider>
-      <NavigationThemeProvider value={isDark ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="chat/[id]" options={{ headerShown: false }} />
-          <Stack.Screen
-            name="call/[id]"
-            options={{ headerShown: false, presentation: "fullScreenModal" }}
-          />
-          <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
-          <Stack.Screen name="search" options={{ headerShown: false }} />
-          <Stack.Screen name="settings" options={{ headerShown: false }} />
-          <Stack.Screen
-            name="new-chat"
-            options={{ presentation: "modal", title: "Новый чат" }}
-          />
-          <Stack.Screen
-            name="modal"
-            options={{ presentation: "modal", title: "Modal" }}
-          />
-        </Stack>
-        <StatusBar style={isDark ? "light" : "dark"} />
-      </NavigationThemeProvider>
-    </IncomingCallProvider>
+    <NavigationThemeProvider value={isDark ? DarkTheme : DefaultTheme}>
+      <Stack>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="chat/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="search" options={{ headerShown: false }} />
+        <Stack.Screen name="settings" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="new-chat"
+          options={{ presentation: "modal", title: "Новый чат" }}
+        />
+        <Stack.Screen
+          name="modal"
+          options={{ presentation: "modal", title: "Modal" }}
+        />
+      </Stack>
+      <StatusBar style={isDark ? "light" : "dark"} />
+    </NavigationThemeProvider>
   );
 }
 

@@ -1,13 +1,19 @@
+import {
+  QuickReactionBar,
+  ReactionDisplay,
+  ReactionUsersModal,
+} from "@/components/message-reactions";
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
 import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
-import { Message, Profile } from "@/types/database";
+import { GroupedReaction, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { Audio, ResizeMode, Video } from "expo-av";
+import { BlurView } from "expo-blur";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -39,6 +45,7 @@ interface MessageWithSender extends Message {
     sender: Profile | null;
     media_type: "image" | "video" | "audio" | null;
   } | null;
+  reactions?: GroupedReaction[];
 }
 
 // Безопасная вибрация (не работает на веб)
@@ -131,6 +138,19 @@ export default function ChatScreen() {
   const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   const searchAnimation = useRef(new Animated.Value(0)).current;
   const searchInputRef = useRef<TextInput>(null);
+
+  // Реакции на сообщения
+  const [showQuickReactions, setShowQuickReactions] = useState(false);
+  const [quickReactionMessageId, setQuickReactionMessageId] = useState<
+    string | null
+  >(null);
+  const quickReactionAnimation = useRef(new Animated.Value(0)).current;
+  const [showReactionUsers, setShowReactionUsers] = useState(false);
+  const [selectedReactionForUsers, setSelectedReactionForUsers] =
+    useState<GroupedReaction | null>(null);
+  const [allReactionsForModal, setAllReactionsForModal] = useState<
+    GroupedReaction[]
+  >([]);
 
   // Онлайн статус собеседника
   const { isOnline, formatLastSeen } = useUserOnlineStatus(
@@ -360,15 +380,258 @@ export default function ChatScreen() {
                 media_type: repliedMsg.media_type,
               }
             : null,
+          reactions: [],
         };
       });
 
       setMessages(messagesWithSenders);
+
+      // Загружаем реакции отдельно
+      await fetchReactions(data?.map((m) => m.id) || []);
     } catch (error) {
       console.error("Error fetching messages:", error);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Загрузка реакций для сообщений
+  const fetchReactions = async (messageIds: string[]) => {
+    if (messageIds.length === 0 || !user) return;
+
+    try {
+      const { data: reactions, error } = await (supabase as any)
+        .from("message_reactions")
+        .select("*")
+        .in("message_id", messageIds);
+
+      if (error) throw error;
+
+      // Получаем профили всех пользователей, которые поставили реакции
+      const userIds = [
+        ...new Set((reactions as any[])?.map((r: any) => r.user_id) || []),
+      ];
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .in("id", userIds);
+
+      const profileMap = new Map(profiles?.map((p) => [p.id, p]) || []);
+
+      // Группируем реакции по сообщениям
+      const reactionsByMessage = new Map<string, GroupedReaction[]>();
+
+      (reactions as any[])?.forEach((r: any) => {
+        if (!reactionsByMessage.has(r.message_id)) {
+          reactionsByMessage.set(r.message_id, []);
+        }
+
+        const messageReactions = reactionsByMessage.get(r.message_id)!;
+        const existingReaction = messageReactions.find(
+          (gr) => gr.emoji === r.emoji,
+        );
+
+        const userProfile = profileMap.get(r.user_id);
+        const userInfo = {
+          id: r.user_id,
+          username: userProfile?.username || "Пользователь",
+          avatar_url: userProfile?.avatar_url || null,
+        };
+
+        if (existingReaction) {
+          existingReaction.count++;
+          existingReaction.users.push(userInfo);
+          if (r.user_id === user.id) {
+            existingReaction.hasReacted = true;
+          }
+        } else {
+          messageReactions.push({
+            emoji: r.emoji,
+            count: 1,
+            users: [userInfo],
+            hasReacted: r.user_id === user.id,
+          });
+        }
+      });
+
+      // Обновляем сообщения с реакциями
+      setMessages((prev) =>
+        prev.map((msg) => ({
+          ...msg,
+          reactions: reactionsByMessage.get(msg.id) || msg.reactions || [],
+        })),
+      );
+    } catch (error) {
+      console.error("Error fetching reactions:", error);
+    }
+  };
+
+  // Добавить/изменить/удалить реакцию (только ОДНА реакция на сообщение от пользователя)
+  const toggleReaction = async (messageId: string, emoji: string) => {
+    if (!user) return;
+
+    try {
+      const message = messages.find((m) => m.id === messageId);
+
+      // Находим текущую реакцию пользователя (если есть)
+      const myCurrentReaction = message?.reactions?.find((r) => r.hasReacted);
+
+      // Получаем профиль текущего пользователя для локального обновления
+      const { data: myProfile } = await supabase
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .eq("id", user.id)
+        .single();
+
+      const myUserInfo = {
+        id: user.id,
+        username: myProfile?.username || "Я",
+        avatar_url: myProfile?.avatar_url || null,
+      };
+
+      if (myCurrentReaction?.emoji === emoji) {
+        // Та же реакция - удаляем её
+        await (supabase as any)
+          .from("message_reactions")
+          .delete()
+          .eq("message_id", messageId)
+          .eq("user_id", user.id);
+
+        // Обновляем локально - удаляем свою реакцию
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== messageId) return msg;
+            const updatedReactions = (msg.reactions || [])
+              .map((r) => {
+                if (r.emoji !== emoji) return r;
+                return {
+                  ...r,
+                  count: r.count - 1,
+                  users: r.users.filter((u) => u.id !== user.id),
+                  hasReacted: false,
+                };
+              })
+              .filter((r) => r.count > 0);
+            return { ...msg, reactions: updatedReactions };
+          }),
+        );
+      } else {
+        // Новая или другая реакция - используем upsert
+        // Сначала удаляем старую реакцию (если была)
+        if (myCurrentReaction) {
+          await (supabase as any)
+            .from("message_reactions")
+            .delete()
+            .eq("message_id", messageId)
+            .eq("user_id", user.id);
+        }
+
+        // Добавляем новую
+        await (supabase as any).from("message_reactions").insert({
+          message_id: messageId,
+          user_id: user.id,
+          emoji,
+        });
+
+        // Обновляем локально
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== messageId) return msg;
+
+            let updatedReactions = [...(msg.reactions || [])];
+
+            // Удаляем старую реакцию пользователя (если была)
+            if (myCurrentReaction) {
+              updatedReactions = updatedReactions
+                .map((r) => {
+                  if (r.emoji !== myCurrentReaction.emoji) return r;
+                  return {
+                    ...r,
+                    count: r.count - 1,
+                    users: r.users.filter((u) => u.id !== user.id),
+                    hasReacted: false,
+                  };
+                })
+                .filter((r) => r.count > 0);
+            }
+
+            // Добавляем новую реакцию
+            const existingEmoji = updatedReactions.find(
+              (r) => r.emoji === emoji,
+            );
+            if (existingEmoji) {
+              updatedReactions = updatedReactions.map((r) =>
+                r.emoji === emoji
+                  ? {
+                      ...r,
+                      count: r.count + 1,
+                      users: [...r.users, myUserInfo],
+                      hasReacted: true,
+                    }
+                  : r,
+              );
+            } else {
+              updatedReactions.push({
+                emoji,
+                count: 1,
+                users: [myUserInfo],
+                hasReacted: true,
+              });
+            }
+
+            return { ...msg, reactions: updatedReactions };
+          }),
+        );
+      }
+
+      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      console.error("Error toggling reaction:", error);
+    }
+  };
+
+  // Показать быстрые реакции для сообщения
+  const showQuickReactionPicker = (messageId: string) => {
+    setQuickReactionMessageId(messageId);
+    setShowQuickReactions(true);
+    Animated.spring(quickReactionAnimation, {
+      toValue: 1,
+      tension: 100,
+      friction: 8,
+      useNativeDriver: true,
+    }).start();
+    safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
+  };
+
+  // Скрыть быстрые реакции
+  const hideQuickReactionPicker = () => {
+    Animated.timing(quickReactionAnimation, {
+      toValue: 0,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowQuickReactions(false);
+      setQuickReactionMessageId(null);
+    });
+  };
+
+  // Обработчик выбора реакции
+  const handleQuickReactionSelect = (emoji: string) => {
+    if (quickReactionMessageId) {
+      toggleReaction(quickReactionMessageId, emoji);
+    }
+    hideQuickReactionPicker();
+    closeMessageMenu(); // Закрываем меню после выбора реакции
+  };
+
+  // Показать модальное окно с пользователями, поставившими реакции
+  const showReactionUsersModal = (
+    reaction: GroupedReaction,
+    allReactions: GroupedReaction[],
+  ) => {
+    setSelectedReactionForUsers(reaction);
+    setAllReactionsForModal(allReactions);
+    setShowReactionUsers(true);
   };
 
   const fetchPinnedMessages = async () => {
@@ -681,6 +944,7 @@ export default function ChatScreen() {
             ...newMsg,
             sender: senderProfile,
             replied_message: repliedMessage,
+            reactions: [],
           };
 
           setMessages((prev) => [...prev, messageWithSender]);
@@ -734,6 +998,33 @@ export default function ChatScreen() {
         }, 3000);
       })
       .subscribe();
+
+    // Подписка на изменения реакций
+    const reactionsChannel = supabase
+      .channel(`reactions:${id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "message_reactions",
+        },
+        async (payload) => {
+          // При любом изменении реакций перезагружаем их для затронутого сообщения
+          const messageId =
+            (payload.new as any)?.message_id ||
+            (payload.old as any)?.message_id;
+          if (messageId) {
+            await fetchReactions([messageId]);
+          }
+        },
+      )
+      .subscribe();
+
+    // Сохраняем для отписки
+    return () => {
+      reactionsChannel.unsubscribe();
+    };
   };
 
   // Отправить индикатор печати
@@ -848,9 +1139,10 @@ export default function ChatScreen() {
   };
 
   const handleMessageLongPress = (message: MessageWithSender) => {
-    // Показываем меню для любого сообщения (копировать), но редактировать/удалить только для своих
+    // Показываем панель быстрых реакций и меню
     safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
     setSelectedMessage(message);
+    showQuickReactionPicker(message.id);
     setShowMessageMenu(true);
 
     Animated.spring(menuAnimation, {
@@ -862,6 +1154,7 @@ export default function ChatScreen() {
   };
 
   const closeMessageMenu = () => {
+    hideQuickReactionPicker();
     Animated.timing(menuAnimation, {
       toValue: 0,
       duration: 150,
@@ -1704,6 +1997,20 @@ export default function ChatScreen() {
                 <Text style={styles.editedLabel}>изменено</Text>
               )}
             </View>
+
+            {/* Reactions display */}
+            {item.reactions && item.reactions.length > 0 && (
+              <ReactionDisplay
+                reactions={item.reactions}
+                onReactionPress={(emoji: string) =>
+                  toggleReaction(item.id, emoji)
+                }
+                onReactionLongPress={(reaction: GroupedReaction) =>
+                  showReactionUsersModal(reaction, item.reactions || [])
+                }
+                isMyMessage={isMyMessage}
+              />
+            )}
           </TouchableOpacity>
         </Animated.View>
       </>
@@ -2575,261 +2882,262 @@ export default function ChatScreen() {
         </Pressable>
       </Modal>
 
-      {/* Message Context Menu Modal */}
+      {/* Reaction Users Modal - кто поставил реакции */}
+      <ReactionUsersModal
+        visible={showReactionUsers}
+        reaction={selectedReactionForUsers}
+        allReactions={allReactionsForModal}
+        onClose={() => setShowReactionUsers(false)}
+        onReactionSelect={(emoji: string) => {
+          if (selectedMessage) {
+            toggleReaction(selectedMessage.id, emoji);
+          }
+          setShowReactionUsers(false);
+        }}
+      />
+
+      {/* Message Context Menu Modal - Telegram Style */}
       <Modal
         visible={showMessageMenu}
         transparent
-        animationType="none"
+        animationType="fade"
         onRequestClose={closeMessageMenu}
       >
-        <Pressable style={styles.menuOverlay} onPress={closeMessageMenu}>
-          <Animated.View
-            style={[
-              styles.menuContainer,
-              { backgroundColor: colors.card },
-              {
-                transform: [
-                  {
-                    translateY: menuAnimation.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [300, 0],
-                    }),
-                  },
-                ],
-                opacity: menuAnimation,
-              },
-            ]}
-          >
-            <View
-              style={[styles.menuHandle, { backgroundColor: colors.border }]}
-            />
+        <Pressable style={styles.blurMenuOverlay} onPress={closeMessageMenu}>
+          <BlurView
+            intensity={isDark ? 40 : 60}
+            tint={isDark ? "dark" : "light"}
+            style={StyleSheet.absoluteFill}
+          />
 
-            {selectedMessage && (
-              <>
-                {/* Message Preview */}
+          {selectedMessage && (
+            <View style={styles.blurMenuContent}>
+              {/* Quick Reactions Bar - вверху */}
+              <Animated.View
+                style={[
+                  styles.blurReactionsBar,
+                  { backgroundColor: colors.card },
+                  {
+                    opacity: quickReactionAnimation,
+                    transform: [
+                      {
+                        scale: quickReactionAnimation.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.8, 1],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <QuickReactionBar
+                  onSelect={handleQuickReactionSelect}
+                  selectedEmoji={
+                    selectedMessage.reactions?.find((r) => r.hasReacted)?.emoji
+                  }
+                />
+              </Animated.View>
+
+              {/* Message Preview - по центру */}
+              <Pressable onPress={(e) => e.stopPropagation()}>
                 <View
                   style={[
-                    styles.menuPreview,
-                    { backgroundColor: colors.inputBackground },
+                    styles.blurMessageContainer,
+                    {
+                      backgroundColor:
+                        selectedMessage.sender_id === user?.id
+                          ? colors.primary
+                          : colors.card,
+                      alignSelf:
+                        selectedMessage.sender_id === user?.id
+                          ? "flex-end"
+                          : "flex-start",
+                    },
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.menuPreviewText,
-                      { color: colors.textSecondary },
-                    ]}
-                    numberOfLines={2}
-                  >
-                    {selectedMessage.content ||
-                      (selectedMessage.media_type === "image"
-                        ? "Фото"
-                        : selectedMessage.media_type === "video"
-                          ? "Видео"
-                          : "Аудио")}
-                  </Text>
-                </View>
-
-                {/* Menu Actions */}
-                <View style={styles.menuActions}>
-                  {/* Ответить */}
-                  <TouchableOpacity
-                    style={[
-                      styles.menuActionItem,
-                      { borderBottomColor: colors.border },
-                    ]}
-                    onPress={() => handleMenuAction("reply")}
-                    activeOpacity={0.7}
-                  >
-                    <View
-                      style={[
-                        styles.menuActionIcon,
-                        { backgroundColor: isDark ? "#4A6741" : "#E8F5E9" },
-                      ]}
-                    >
-                      <Ionicons
-                        name="arrow-undo-outline"
-                        size={22}
-                        color={isDark ? "#A5D6A7" : "#43A047"}
-                      />
-                    </View>
-                    <Text
-                      style={[styles.menuActionText, { color: colors.text }]}
-                    >
-                      Ответить
-                    </Text>
-                  </TouchableOpacity>
-
-                  {selectedMessage.content && (
-                    <TouchableOpacity
-                      style={[
-                        styles.menuActionItem,
-                        { borderBottomColor: colors.border },
-                      ]}
-                      onPress={() => handleMenuAction("copy")}
-                      activeOpacity={0.7}
-                    >
-                      <View
-                        style={[
-                          styles.menuActionIcon,
-                          { backgroundColor: isDark ? "#3D5A80" : "#E3F2FD" },
-                        ]}
-                      >
-                        <Ionicons
-                          name="copy-outline"
-                          size={22}
-                          color={isDark ? "#90CAF9" : "#1976D2"}
+                  {/* Медиа контент */}
+                  {selectedMessage.media_url && (
+                    <View style={styles.blurMessageMedia}>
+                      {selectedMessage.media_type === "image" && (
+                        <Image
+                          source={{ uri: selectedMessage.media_url }}
+                          style={styles.blurMessageImage}
+                          resizeMode="cover"
                         />
-                      </View>
-                      <Text
-                        style={[styles.menuActionText, { color: colors.text }]}
-                      >
-                        Копировать
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-
-                  {selectedMessage.sender_id === user?.id &&
-                    selectedMessage.content && (
-                      <TouchableOpacity
-                        style={[
-                          styles.menuActionItem,
-                          { borderBottomColor: colors.border },
-                        ]}
-                        onPress={() => handleMenuAction("edit")}
-                        activeOpacity={0.7}
-                      >
-                        <View
-                          style={[
-                            styles.menuActionIcon,
-                            { backgroundColor: isDark ? "#5D4E6D" : "#F3E5F5" },
-                          ]}
-                        >
-                          <Ionicons
-                            name="pencil-outline"
-                            size={22}
-                            color={isDark ? "#CE93D8" : "#8E24AA"}
-                          />
+                      )}
+                      {selectedMessage.media_type === "video" && (
+                        <View style={styles.blurMessageVideoPlaceholder}>
+                          <Ionicons name="play-circle" size={40} color="#fff" />
                         </View>
-                        <Text
-                          style={[
-                            styles.menuActionText,
-                            { color: colors.text },
-                          ]}
-                        >
-                          Редактировать
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-
-                  {selectedMessage.sender_id === user?.id && (
-                    <TouchableOpacity
-                      style={[
-                        styles.menuActionItem,
-                        { borderBottomColor: colors.border },
-                      ]}
-                      onPress={() => handleMenuAction("delete")}
-                      activeOpacity={0.7}
-                    >
-                      <View
-                        style={[
-                          styles.menuActionIcon,
-                          { backgroundColor: isDark ? "#5D3A3A" : "#FFEBEE" },
-                        ]}
-                      >
-                        <Ionicons
-                          name="trash-outline"
-                          size={22}
-                          color={isDark ? "#EF9A9A" : "#E53935"}
-                        />
-                      </View>
-                      <Text
-                        style={[
-                          styles.menuActionText,
-                          { color: isDark ? "#EF9A9A" : "#E53935" },
-                        ]}
-                      >
-                        Удалить
-                      </Text>
-                    </TouchableOpacity>
+                      )}
+                    </View>
                   )}
 
-                  {/* Закрепить/Открепить */}
-                  <TouchableOpacity
-                    style={[
-                      styles.menuActionItem,
-                      { borderBottomColor: colors.border },
-                    ]}
-                    onPress={() => handleMenuAction("pin")}
-                    activeOpacity={0.7}
-                  >
-                    <View
+                  {/* Текст сообщения */}
+                  {selectedMessage.content && (
+                    <Text
                       style={[
-                        styles.menuActionIcon,
+                        styles.blurMessageText,
                         {
-                          backgroundColor: pinnedMessages.some(
-                            (p) => p.message.id === selectedMessage.id,
-                          )
-                            ? isDark
-                              ? "#6D5D3B"
-                              : "#FFF3E0"
-                            : isDark
-                              ? "#3D5A80"
-                              : "#E3F2FD",
+                          color:
+                            selectedMessage.sender_id === user?.id
+                              ? "#FFFFFF"
+                              : colors.text,
                         },
                       ]}
                     >
-                      <Ionicons
-                        name={
-                          pinnedMessages.some(
-                            (p) => p.message.id === selectedMessage.id,
-                          )
-                            ? "bookmark"
-                            : "bookmark-outline"
-                        }
-                        size={22}
-                        color={
-                          pinnedMessages.some(
-                            (p) => p.message.id === selectedMessage.id,
-                          )
-                            ? isDark
-                              ? "#FFB74D"
-                              : "#F57C00"
-                            : isDark
-                              ? "#90CAF9"
-                              : "#1976D2"
-                        }
-                      />
-                    </View>
-                    <Text
-                      style={[styles.menuActionText, { color: colors.text }]}
-                    >
-                      {pinnedMessages.some(
-                        (p) => p.message.id === selectedMessage.id,
-                      )
-                        ? "Открепить"
-                        : "Закрепить"}
+                      {selectedMessage.content}
                     </Text>
-                  </TouchableOpacity>
-                </View>
+                  )}
 
-                {/* Cancel Button */}
+                  {/* Время */}
+                  <Text
+                    style={[
+                      styles.blurMessageTime,
+                      {
+                        color:
+                          selectedMessage.sender_id === user?.id
+                            ? "rgba(255,255,255,0.7)"
+                            : colors.textSecondary,
+                      },
+                    ]}
+                  >
+                    {new Date(selectedMessage.created_at).toLocaleTimeString(
+                      [],
+                      {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      },
+                    )}
+                  </Text>
+                </View>
+              </Pressable>
+
+              {/* Action Buttons - внизу */}
+              <View
+                style={[
+                  styles.blurActionsContainer,
+                  { backgroundColor: colors.card },
+                ]}
+              >
+                {/* Ответить */}
                 <TouchableOpacity
-                  style={[
-                    styles.menuCancelButton,
-                    { backgroundColor: colors.inputBackground },
-                  ]}
-                  onPress={closeMessageMenu}
+                  style={styles.blurActionItem}
+                  onPress={() => handleMenuAction("reply")}
                   activeOpacity={0.7}
                 >
-                  <Text
-                    style={[styles.menuCancelText, { color: colors.primary }]}
-                  >
-                    Отмена
+                  <Ionicons
+                    name="arrow-undo-outline"
+                    size={24}
+                    color={isDark ? "#A5D6A7" : "#43A047"}
+                  />
+                  <Text style={[styles.blurActionText, { color: colors.text }]}>
+                    Ответить
                   </Text>
                 </TouchableOpacity>
-              </>
-            )}
-          </Animated.View>
+
+                {/* Копировать */}
+                {selectedMessage.content && (
+                  <TouchableOpacity
+                    style={styles.blurActionItem}
+                    onPress={() => handleMenuAction("copy")}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons
+                      name="copy-outline"
+                      size={24}
+                      color={isDark ? "#90CAF9" : "#1976D2"}
+                    />
+                    <Text
+                      style={[styles.blurActionText, { color: colors.text }]}
+                    >
+                      Копировать
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* Редактировать */}
+                {selectedMessage.sender_id === user?.id &&
+                  selectedMessage.content && (
+                    <TouchableOpacity
+                      style={styles.blurActionItem}
+                      onPress={() => handleMenuAction("edit")}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name="pencil-outline"
+                        size={24}
+                        color={isDark ? "#CE93D8" : "#8E24AA"}
+                      />
+                      <Text
+                        style={[styles.blurActionText, { color: colors.text }]}
+                      >
+                        Изменить
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                {/* Закрепить */}
+                <TouchableOpacity
+                  style={styles.blurActionItem}
+                  onPress={() => handleMenuAction("pin")}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={
+                      pinnedMessages.some(
+                        (p) => p.message.id === selectedMessage.id,
+                      )
+                        ? "bookmark"
+                        : "bookmark-outline"
+                    }
+                    size={24}
+                    color={
+                      pinnedMessages.some(
+                        (p) => p.message.id === selectedMessage.id,
+                      )
+                        ? isDark
+                          ? "#FFB74D"
+                          : "#F57C00"
+                        : isDark
+                          ? "#90CAF9"
+                          : "#1976D2"
+                    }
+                  />
+                  <Text style={[styles.blurActionText, { color: colors.text }]}>
+                    {pinnedMessages.some(
+                      (p) => p.message.id === selectedMessage.id,
+                    )
+                      ? "Открепить"
+                      : "Закрепить"}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Удалить */}
+                {selectedMessage.sender_id === user?.id && (
+                  <TouchableOpacity
+                    style={styles.blurActionItem}
+                    onPress={() => handleMenuAction("delete")}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons
+                      name="trash-outline"
+                      size={24}
+                      color={isDark ? "#EF9A9A" : "#E53935"}
+                    />
+                    <Text
+                      style={[
+                        styles.blurActionText,
+                        { color: isDark ? "#EF9A9A" : "#E53935" },
+                      ]}
+                    >
+                      Удалить
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          )}
         </Pressable>
       </Modal>
 
@@ -3485,6 +3793,10 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginBottom: 16,
   },
+  quickReactionsContainer: {
+    alignItems: "center",
+    marginBottom: 12,
+  },
   menuPreview: {
     paddingHorizontal: 20,
     paddingVertical: 12,
@@ -3981,5 +4293,87 @@ const styles = StyleSheet.create({
     color: "#000",
     borderRadius: 2,
     fontWeight: "600",
+  },
+  // Telegram-style blur menu
+  blurMenuOverlay: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  blurMenuContent: {
+    width: "100%",
+    paddingHorizontal: 20,
+    alignItems: "center",
+    gap: 16,
+  },
+  blurReactionsBar: {
+    borderRadius: 24,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  blurMessageContainer: {
+    maxWidth: "85%",
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  blurMessageMedia: {
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 6,
+  },
+  blurMessageImage: {
+    width: 220,
+    height: 160,
+    borderRadius: 12,
+  },
+  blurMessageVideoPlaceholder: {
+    width: 220,
+    height: 160,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderRadius: 12,
+  },
+  blurMessageText: {
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  blurMessageTime: {
+    fontSize: 11,
+    marginTop: 4,
+    textAlign: "right",
+  },
+  blurActionsContainer: {
+    borderRadius: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    minWidth: 200,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  blurActionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    gap: 12,
+  },
+  blurActionText: {
+    fontSize: 16,
+    fontWeight: "500",
   },
 });

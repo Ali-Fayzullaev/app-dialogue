@@ -9,11 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
-      "infoPlist": {
-        "NSCameraUsageDescription": "Приложению нужен доступ к камере для видеозвонков",
-        "NSMicrophoneUsageDescription": "Приложению нужен доступ к микрофону для аудио и видеозвонков"
-      }
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
@@ -25,13 +21,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.alifayzullaev.myfirstapp",
-      "permissions": [
-        "CAMERA",
-        "RECORD_AUDIO",
-        "MODIFY_AUDIO_SETTINGS",
-        "INTERNET",
-        "ACCESS_NETWORK_STATE"
-      ]
+      "permissions": ["INTERNET", "ACCESS_NETWORK_STATE"]
     },
     "web": {
       "output": "static",
@@ -60,27 +50,7 @@
           "sounds": []
         }
       ],
-      [
-        "expo-av",
-        {
-          "microphonePermission": "Приложению нужен доступ к микрофону для звонков"
-        }
-      ],
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "Приложению нужен доступ к камере для видеозвонков",
-          "microphonePermission": "Приложению нужен доступ к микрофону для звонков",
-          "recordAudioAndroid": true
-        }
-      ],
-      [
-        "@config-plugins/react-native-webrtc",
-        {
-          "cameraPermission": "Приложению нужен доступ к камере для видеозвонков",
-          "microphonePermission": "Приложению нужен доступ к микрофону для звонков"
-        }
-      ]
+      "expo-av"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -275,3 +275,25 @@ export interface GroupChatDetails extends Chat {
   member_count: number;
   is_admin: boolean;
 }
+
+// Реакция на сообщение
+export interface MessageReaction {
+  id: string;
+  message_id: string;
+  user_id: string;
+  emoji: string;
+  created_at: string;
+}
+
+// Реакция с информацией о пользователе
+export interface MessageReactionWithUser extends MessageReaction {
+  user?: Profile;
+}
+
+// Сгруппированные реакции для отображения
+export interface GroupedReaction {
+  emoji: string;
+  count: number;
+  users: { id: string; username: string; avatar_url: string | null }[]; // пользователи с профилями
+  hasReacted: boolean; // текущий пользователь поставил эту реакцию
+}

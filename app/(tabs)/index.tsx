@@ -1,6 +1,9 @@
+import { OfflineBanner } from "@/components/offline-banner";
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
+import { useNetworkStatus } from "@/hooks/use-network-status";
+import { CachedChat, cacheService } from "@/lib/cache-service";
 import { supabase } from "@/lib/supabase";
 import { Chat, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
@@ -32,6 +35,7 @@ interface ChatItem extends Chat {
 export default function ChatsScreen() {
   const [chats, setChats] = useState<ChatItem[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [isLoadingFromCache, setIsLoadingFromCache] = useState(true);
   const [showFabMenu, setShowFabMenu] = useState(false);
   const [viewingAvatar, setViewingAvatar] = useState<{
     url: string | null;
@@ -45,6 +49,7 @@ export default function ChatsScreen() {
   const { user } = useAuth();
   const { colors } = useTheme();
   const router = useRouter();
+  const { isOffline } = useNetworkStatus();
 
   const toggleFabMenu = () => {
     if (Platform.OS !== "web") {
@@ -84,8 +89,52 @@ export default function ChatsScreen() {
     setShowFabMenu(false);
   };
 
+  // Загрузка из кеша (мгновенно)
+  const loadFromCache = async () => {
+    const cachedChats = await cacheService.getCachedChats();
+    if (cachedChats && cachedChats.length > 0) {
+      // Преобразуем кешированные чаты в ChatItem формат
+      const chatItems: ChatItem[] = cachedChats.map((cached) => ({
+        id: cached.id,
+        name: cached.name,
+        is_group: cached.is_group,
+        avatar_url: cached.avatar_url,
+        created_at: "",
+        admin_id: null,
+        description: null,
+        members: cached.other_user
+          ? [
+              {
+                id: cached.other_user.id,
+                username: cached.other_user.username,
+                avatar_url: cached.other_user.avatar_url,
+                created_at: "",
+              },
+            ]
+          : [],
+        last_message: cached.last_message
+          ? ({
+              content: cached.last_message.content,
+              created_at: cached.last_message.created_at,
+              media_type: cached.last_message.media_type as any,
+            } as Message)
+          : null,
+        unread_count: cached.unread_count,
+        other_user_online: false,
+      }));
+      setChats(chatItems);
+    }
+    setIsLoadingFromCache(false);
+  };
+
   const fetchChats = async () => {
     if (!user) return;
+
+    // Если офлайн - не пытаемся загрузить с сервера
+    if (isOffline) {
+      console.log("📴 Offline mode - using cache only");
+      return;
+    }
 
     try {
       const { data: chatMembers, error: memberError } = await supabase
@@ -169,6 +218,35 @@ export default function ChatsScreen() {
       });
 
       setChats(chatsWithDetails);
+
+      // Сохраняем в кеш для офлайн режима
+      const toCache: CachedChat[] = chatsWithDetails.map((chat) => {
+        const otherMember = chat.members.find((m) => m.id !== user.id);
+        return {
+          id: chat.id,
+          name: chat.name,
+          is_group: chat.is_group,
+          avatar_url: chat.avatar_url,
+          last_message: chat.last_message
+            ? {
+                content: chat.last_message.content,
+                created_at: chat.last_message.created_at,
+                sender_name: undefined,
+                media_type: chat.last_message.media_type,
+              }
+            : undefined,
+          unread_count: chat.unread_count,
+          other_user: otherMember
+            ? {
+                id: otherMember.id,
+                username: otherMember.username,
+                avatar_url: otherMember.avatar_url,
+              }
+            : undefined,
+        };
+      });
+      await cacheService.cacheChats(toCache);
+      await cacheService.setLastSync();
     } catch (error) {
       console.error("Error fetching chats:", error);
     }
@@ -176,8 +254,11 @@ export default function ChatsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Сначала загружаем из кеша (мгновенно)
+      loadFromCache();
+      // Потом обновляем с сервера
       fetchChats();
-    }, [user]),
+    }, [user, isOffline]),
   );
 
   const onRefresh = async () => {
@@ -363,6 +444,9 @@ export default function ChatsScreen() {
       <StatusBar
         barStyle={colors.text === "#1a1a1a" ? "dark-content" : "light-content"}
       />
+
+      {/* Офлайн баннер */}
+      <OfflineBanner />
 
       {/* Header */}
       <View style={[styles.header, { backgroundColor: colors.background }]}>

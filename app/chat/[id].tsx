@@ -470,6 +470,9 @@ export default function ChatScreen() {
   const toggleReaction = async (messageId: string, emoji: string) => {
     if (!user) return;
 
+    // Предотвращаем автоскролл при изменении реакций
+    skipAutoScrollRef.current = true;
+
     try {
       const message = messages.find((m) => m.id === messageId);
 
@@ -587,6 +590,11 @@ export default function ChatScreen() {
       safeHaptic(Haptics.ImpactFeedbackStyle.Light);
     } catch (error) {
       console.error("Error toggling reaction:", error);
+    } finally {
+      // Сбрасываем флаг через небольшую задержку
+      setTimeout(() => {
+        skipAutoScrollRef.current = false;
+      }, 300);
     }
   };
 

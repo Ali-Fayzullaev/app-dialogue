@@ -6,7 +6,7 @@ import { useNetworkStatus } from "@/hooks/use-network-status";
 import { isUserReallyOnline } from "@/hooks/use-presence";
 import { CachedChat, cacheService } from "@/lib/cache-service";
 import { supabase } from "@/lib/supabase";
-import { Chat, Message, Profile } from "@/types/database";
+import { Chat, ChatFolderWithCount, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -20,6 +20,7 @@ import {
     Platform,
     Pressable,
     RefreshControl,
+    ScrollView,
     StatusBar,
     StyleSheet,
     Text,
@@ -47,6 +48,9 @@ export default function ChatsScreen() {
   const [showArchived, setShowArchived] = useState(false);
   const [selectedChat, setSelectedChat] = useState<ChatItem | null>(null);
   const [showChatMenu, setShowChatMenu] = useState(false);
+  const [folders, setFolders] = useState<ChatFolderWithCount[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [showFolderMenu, setShowFolderMenu] = useState(false);
   const [viewingAvatar, setViewingAvatar] = useState<{
     url: string | null;
     name: string;
@@ -396,12 +400,117 @@ export default function ChatsScreen() {
     }
   };
 
+  // Загрузка папок
+  const fetchFolders = async () => {
+    if (!user) return;
+
+    try {
+      const { data: foldersData, error: foldersError } = await supabase
+        .from("chat_folders")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("position", { ascending: true });
+
+      if (foldersError) throw foldersError;
+
+      const { data: itemsData, error: itemsError } = await supabase
+        .from("chat_folder_items")
+        .select("folder_id, chat_id")
+        .eq("user_id", user.id);
+
+      if (itemsError) throw itemsError;
+
+      const folderItemsMap = new Map<string, string[]>();
+      itemsData?.forEach((item) => {
+        const existing = folderItemsMap.get(item.folder_id) || [];
+        existing.push(item.chat_id);
+        folderItemsMap.set(item.folder_id, existing);
+      });
+
+      const foldersWithCount: ChatFolderWithCount[] = (foldersData || []).map(
+        (folder) => ({
+          ...folder,
+          chat_count: folderItemsMap.get(folder.id)?.length || 0,
+          chat_ids: folderItemsMap.get(folder.id) || [],
+        }),
+      );
+
+      setFolders(foldersWithCount);
+    } catch (error) {
+      console.error("Error fetching folders:", error);
+    }
+  };
+
+  // Добавить чат в папку
+  const addChatToFolder = async (chatId: string, folderId: string) => {
+    if (!user) return;
+
+    try {
+      // Проверяем, не добавлен ли уже чат в папку
+      const folder = folders.find((f) => f.id === folderId);
+      if (folder?.chat_ids.includes(chatId)) {
+        // Удаляем из папки
+        const { error } = await supabase
+          .from("chat_folder_items")
+          .delete()
+          .eq("folder_id", folderId)
+          .eq("chat_id", chatId)
+          .eq("user_id", user.id);
+
+        if (error) throw error;
+
+        setFolders((prev) =>
+          prev.map((f) =>
+            f.id === folderId
+              ? {
+                  ...f,
+                  chat_count: f.chat_count - 1,
+                  chat_ids: f.chat_ids.filter((id) => id !== chatId),
+                }
+              : f,
+          ),
+        );
+      } else {
+        // Добавляем в папку
+        const { error } = await supabase.from("chat_folder_items").insert({
+          folder_id: folderId,
+          chat_id: chatId,
+          user_id: user.id,
+        });
+
+        if (error) throw error;
+
+        setFolders((prev) =>
+          prev.map((f) =>
+            f.id === folderId
+              ? {
+                  ...f,
+                  chat_count: f.chat_count + 1,
+                  chat_ids: [...f.chat_ids, chatId],
+                }
+              : f,
+          ),
+        );
+      }
+
+      if (Platform.OS !== "web") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (error) {
+      console.error("Error toggling chat in folder:", error);
+    }
+
+    setShowFolderMenu(false);
+    setSelectedChat(null);
+  };
+
   useFocusEffect(
     useCallback(() => {
       // Сначала загружаем из кеша (мгновенно)
       loadFromCache();
       // Потом обновляем с сервера
       fetchChats();
+      fetchFolders();
     }, [user, isOffline]),
   );
 
@@ -689,8 +798,121 @@ export default function ChatsScreen() {
         {/* Header */}
         <View style={[styles.header, { backgroundColor: colors.background }]}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Чаты</Text>
-          <View style={{ width: 44 }} />
+          <TouchableOpacity
+            style={styles.foldersButton}
+            onPress={() => router.push("/folders")}
+          >
+            <Ionicons name="folder-outline" size={24} color={colors.primary} />
+          </TouchableOpacity>
         </View>
+
+        {/* Folder Tabs */}
+        {folders.length > 0 && !showArchived && (
+          <View style={styles.folderTabsContainer}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.folderTabsContent}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.folderTab,
+                  {
+                    backgroundColor:
+                      selectedFolderId === null
+                        ? colors.primary
+                        : colors.inputBackground,
+                  },
+                ]}
+                onPress={() => {
+                  setSelectedFolderId(null);
+                  if (Platform.OS !== "web") {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }
+                }}
+              >
+                <Ionicons
+                  name="chatbubbles"
+                  size={16}
+                  color={selectedFolderId === null ? "#fff" : colors.text}
+                />
+                <Text
+                  style={[
+                    styles.folderTabText,
+                    { color: selectedFolderId === null ? "#fff" : colors.text },
+                  ]}
+                >
+                  Все
+                </Text>
+              </TouchableOpacity>
+
+              {folders.map((folder) => (
+                <TouchableOpacity
+                  key={folder.id}
+                  style={[
+                    styles.folderTab,
+                    {
+                      backgroundColor:
+                        selectedFolderId === folder.id
+                          ? folder.color
+                          : colors.inputBackground,
+                    },
+                  ]}
+                  onPress={() => {
+                    setSelectedFolderId(folder.id);
+                    if (Platform.OS !== "web") {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    }
+                  }}
+                >
+                  <Ionicons
+                    name={folder.icon as any}
+                    size={16}
+                    color={
+                      selectedFolderId === folder.id ? "#fff" : colors.text
+                    }
+                  />
+                  <Text
+                    style={[
+                      styles.folderTabText,
+                      {
+                        color:
+                          selectedFolderId === folder.id ? "#fff" : colors.text,
+                      },
+                    ]}
+                  >
+                    {folder.name}
+                  </Text>
+                  {folder.chat_count > 0 && (
+                    <View
+                      style={[
+                        styles.folderTabBadge,
+                        {
+                          backgroundColor:
+                            selectedFolderId === folder.id
+                              ? "rgba(255,255,255,0.3)"
+                              : colors.textMuted,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.folderTabBadgeText,
+                          {
+                            color:
+                              selectedFolderId === folder.id ? "#fff" : "#fff",
+                          },
+                        ]}
+                      >
+                        {folder.chat_count}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Search Bar - navigates to global search */}
         <TouchableOpacity
@@ -786,79 +1008,137 @@ export default function ChatsScreen() {
         )}
 
         {/* Chat List */}
-        {chats.filter((c) => (showArchived ? c.is_archived : !c.is_archived))
-          .length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <View
-              style={[
-                styles.emptyIcon,
-                { backgroundColor: colors.primaryLight },
-              ]}
-            >
-              <Ionicons
-                name={showArchived ? "archive-outline" : "chatbubbles-outline"}
-                size={48}
-                color={colors.primary}
-              />
-            </View>
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>
-              {showArchived ? "Архив пуст" : "Нет чатов"}
-            </Text>
-            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-              {showArchived
-                ? "Зажмите чат чтобы добавить в архив"
-                : "Начните общение, нажав на кнопку выше"}
-            </Text>
-            {showArchived ? (
-              <TouchableOpacity
-                style={[
-                  styles.startChatButton,
-                  { backgroundColor: colors.primary },
-                ]}
-                onPress={() => {
-                  if (Platform.OS !== "web") {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  }
-                  setShowArchived(false);
-                }}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.startChatButtonText}>Назад к чатам</Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[
-                  styles.startChatButton,
-                  { backgroundColor: colors.primary },
-                ]}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  router.push("/new-chat");
-                }}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.startChatButtonText}>Новый чат</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        ) : (
-          <FlatList
-            data={chats.filter((c) =>
+        {(() => {
+          // Фильтрация чатов по папке и архиву
+          const getFilteredChats = () => {
+            let filtered = chats;
+
+            // Сначала фильтруем по архивации
+            filtered = filtered.filter((c) =>
               showArchived ? c.is_archived : !c.is_archived,
-            )}
-            renderItem={renderChat}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.listContainer}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                tintColor={colors.primary}
-              />
+            );
+
+            // Затем по папке (если не показываем архив и выбрана папка)
+            if (!showArchived && selectedFolderId) {
+              const folder = folders.find((f) => f.id === selectedFolderId);
+              if (folder) {
+                filtered = filtered.filter((c) =>
+                  folder.chat_ids.includes(c.id),
+                );
+              }
             }
-            showsVerticalScrollIndicator={false}
-          />
-        )}
+
+            return filtered;
+          };
+
+          const filteredChats = getFilteredChats();
+          const selectedFolder = folders.find((f) => f.id === selectedFolderId);
+
+          return filteredChats.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <View
+                style={[
+                  styles.emptyIcon,
+                  {
+                    backgroundColor: selectedFolder?.color
+                      ? `${selectedFolder.color}20`
+                      : colors.primaryLight,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={
+                    showArchived
+                      ? "archive-outline"
+                      : selectedFolderId
+                        ? (selectedFolder?.icon as any) || "folder-outline"
+                        : "chatbubbles-outline"
+                  }
+                  size={48}
+                  color={selectedFolder?.color || colors.primary}
+                />
+              </View>
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>
+                {showArchived
+                  ? "Архив пуст"
+                  : selectedFolderId
+                    ? "Папка пуста"
+                    : "Нет чатов"}
+              </Text>
+              <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                {showArchived
+                  ? "Зажмите чат чтобы добавить в архив"
+                  : selectedFolderId
+                    ? "Зажмите чат чтобы добавить в папку"
+                    : "Начните общение, нажав на кнопку выше"}
+              </Text>
+              {showArchived ? (
+                <TouchableOpacity
+                  style={[
+                    styles.startChatButton,
+                    { backgroundColor: colors.primary },
+                  ]}
+                  onPress={() => {
+                    if (Platform.OS !== "web") {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    }
+                    setShowArchived(false);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.startChatButtonText}>Назад к чатам</Text>
+                </TouchableOpacity>
+              ) : selectedFolderId ? (
+                <TouchableOpacity
+                  style={[
+                    styles.startChatButton,
+                    {
+                      backgroundColor: selectedFolder?.color || colors.primary,
+                    },
+                  ]}
+                  onPress={() => {
+                    if (Platform.OS !== "web") {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    }
+                    setSelectedFolderId(null);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.startChatButtonText}>Все чаты</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[
+                    styles.startChatButton,
+                    { backgroundColor: colors.primary },
+                  ]}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    router.push("/new-chat");
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.startChatButtonText}>Новый чат</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : (
+            <FlatList
+              data={filteredChats}
+              renderItem={renderChat}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.listContainer}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  tintColor={colors.primary}
+                />
+              }
+              showsVerticalScrollIndicator={false}
+            />
+          );
+        })()}
 
         {/* FAB Button */}
         <Animated.View
@@ -1078,6 +1358,32 @@ export default function ChatsScreen() {
                 </Text>
               </TouchableOpacity>
 
+              {/* Добавить в папку */}
+              {folders.length > 0 && (
+                <TouchableOpacity
+                  style={styles.chatMenuItem}
+                  onPress={() => {
+                    setShowChatMenu(false);
+                    setShowFolderMenu(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.chatMenuIconCircle,
+                      { backgroundColor: "#5856D6" },
+                    ]}
+                  >
+                    <Ionicons name="folder" size={18} color="#fff" />
+                  </View>
+                  <Text
+                    style={[styles.chatMenuItemText, { color: colors.text }]}
+                  >
+                    Добавить в папку
+                  </Text>
+                </TouchableOpacity>
+              )}
+
               {/* Удалить */}
               <TouchableOpacity
                 style={styles.chatMenuItem}
@@ -1108,6 +1414,135 @@ export default function ChatsScreen() {
                 style={[styles.chatMenuItem, styles.chatMenuItemCancel]}
                 onPress={() => {
                   setShowChatMenu(false);
+                  setSelectedChat(null);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.chatMenuItemText,
+                    { color: colors.textMuted, textAlign: "center" },
+                  ]}
+                >
+                  Отмена
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Modal>
+
+        {/* Folder Selection Modal */}
+        <Modal
+          visible={showFolderMenu}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            setShowFolderMenu(false);
+            setSelectedChat(null);
+          }}
+        >
+          <Pressable
+            style={styles.chatMenuOverlay}
+            onPress={() => {
+              setShowFolderMenu(false);
+              setSelectedChat(null);
+            }}
+          >
+            <View
+              style={[
+                styles.chatMenuContainer,
+                { backgroundColor: colors.card },
+              ]}
+            >
+              <Text style={[styles.chatMenuTitle, { color: colors.text }]}>
+                Выберите папку
+              </Text>
+
+              <ScrollView style={{ maxHeight: 300 }}>
+                {folders.map((folder) => {
+                  const isInFolder = selectedChat
+                    ? folder.chat_ids.includes(selectedChat.id)
+                    : false;
+
+                  return (
+                    <TouchableOpacity
+                      key={folder.id}
+                      style={styles.chatMenuItem}
+                      onPress={() => {
+                        if (selectedChat) {
+                          addChatToFolder(selectedChat.id, folder.id);
+                        }
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View
+                        style={[
+                          styles.chatMenuIconCircle,
+                          { backgroundColor: folder.color },
+                        ]}
+                      >
+                        <Ionicons
+                          name={folder.icon as any}
+                          size={18}
+                          color="#fff"
+                        />
+                      </View>
+                      <Text
+                        style={[
+                          styles.chatMenuItemText,
+                          { color: colors.text, flex: 1 },
+                        ]}
+                      >
+                        {folder.name}
+                      </Text>
+                      {isInFolder && (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={22}
+                          color={folder.color}
+                        />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              {/* Управление папками */}
+              <TouchableOpacity
+                style={[
+                  styles.chatMenuItem,
+                  {
+                    borderTopWidth: StyleSheet.hairlineWidth,
+                    borderTopColor: colors.borderLight,
+                    marginTop: 8,
+                    paddingTop: 16,
+                  },
+                ]}
+                onPress={() => {
+                  setShowFolderMenu(false);
+                  setSelectedChat(null);
+                  router.push("/folders");
+                }}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.chatMenuIconCircle,
+                    { backgroundColor: colors.textMuted },
+                  ]}
+                >
+                  <Ionicons name="settings-outline" size={18} color="#fff" />
+                </View>
+                <Text style={[styles.chatMenuItemText, { color: colors.text }]}>
+                  Управление папками
+                </Text>
+              </TouchableOpacity>
+
+              {/* Отмена */}
+              <TouchableOpacity
+                style={[styles.chatMenuItem, styles.chatMenuItemCancel]}
+                onPress={() => {
+                  setShowFolderMenu(false);
                   setSelectedChat(null);
                 }}
                 activeOpacity={0.7}
@@ -1521,5 +1956,43 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     marginTop: 4,
+  },
+  // Folder Tabs
+  foldersButton: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  folderTabsContainer: {
+    paddingBottom: 8,
+  },
+  folderTabsContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  folderTab: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
+  },
+  folderTabText: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  folderTabBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 5,
+  },
+  folderTabBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
   },
 });

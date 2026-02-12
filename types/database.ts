@@ -253,6 +253,60 @@ export interface Database {
         };
         Relationships: [];
       };
+      chat_folders: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          icon: string;
+          color: string;
+          position: number;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name: string;
+          icon?: string;
+          color?: string;
+          position?: number;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          name?: string;
+          icon?: string;
+          color?: string;
+          position?: number;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      chat_folder_items: {
+        Row: {
+          id: string;
+          folder_id: string;
+          chat_id: string;
+          user_id: string;
+          added_at: string;
+        };
+        Insert: {
+          id?: string;
+          folder_id: string;
+          chat_id: string;
+          user_id: string;
+          added_at?: string;
+        };
+        Update: {
+          id?: string;
+          folder_id?: string;
+          chat_id?: string;
+          user_id?: string;
+          added_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: {};
     Functions: {};
@@ -316,4 +370,15 @@ export interface GroupedReaction {
   count: number;
   users: { id: string; username: string; avatar_url: string | null }[]; // пользователи с профилями
   hasReacted: boolean; // текущий пользователь поставил эту реакцию
+}
+
+// Папки чатов
+export type ChatFolder = Database["public"]["Tables"]["chat_folders"]["Row"];
+export type ChatFolderItem =
+  Database["public"]["Tables"]["chat_folder_items"]["Row"];
+
+// Папка с количеством чатов
+export interface ChatFolderWithCount extends ChatFolder {
+  chat_count: number;
+  chat_ids: string[];
 }

@@ -1,39 +1,34 @@
-import { accentColors, ThemeMode, useTheme } from "@/contexts/theme-context";
+import { useTheme } from "@/contexts/theme-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React from "react";
 import {
-    Platform,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const {
-    colors,
-    themeMode,
-    setThemeMode,
-    accentColor,
-    setAccentColor,
-    isDark,
-  } = useTheme();
+  const { colors, themeMode, accentColor } = useTheme();
 
-  const themeModes: {
-    mode: ThemeMode;
-    label: string;
-    icon: keyof typeof Ionicons.glyphMap;
-  }[] = [
-    { mode: "light", label: "Светлая", icon: "sunny" },
-    { mode: "dark", label: "Тёмная", icon: "moon" },
-    { mode: "system", label: "Системная", icon: "phone-portrait" },
-  ];
+  // Получаем текст для текущей темы
+  const getThemeText = () => {
+    switch (themeMode) {
+      case "light":
+        return "Светлая";
+      case "dark":
+        return "Тёмная";
+      case "system":
+        return "Системная";
+    }
+  };
 
   const styles = StyleSheet.create({
     container: {
@@ -72,10 +67,10 @@ export default function SettingsScreen() {
       paddingHorizontal: 16,
     },
     sectionTitle: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: "600",
       color: colors.textSecondary,
-      marginBottom: 12,
+      marginBottom: 10,
       textTransform: "uppercase",
       letterSpacing: 0.5,
     },
@@ -95,16 +90,6 @@ export default function SettingsScreen() {
         },
       }),
     },
-    themeOption: {
-      flexDirection: "row",
-      alignItems: "center",
-      padding: 16,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.borderLight,
-    },
-    themeOptionLast: {
-      borderBottomWidth: 0,
-    },
     navItem: {
       flexDirection: "row",
       alignItems: "center",
@@ -121,142 +106,30 @@ export default function SettingsScreen() {
       borderRadius: 12,
       justifyContent: "center",
       alignItems: "center",
-      marginRight: 12,
+      marginRight: 14,
+    },
+    navContent: {
+      flex: 1,
     },
     navLabel: {
-      flex: 1,
       fontSize: 16,
+      fontWeight: "500",
       color: colors.text,
     },
-    themeIcon: {
-      width: 40,
-      height: 40,
-      borderRadius: 12,
-      justifyContent: "center",
-      alignItems: "center",
-      marginRight: 12,
+    navValue: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      marginTop: 2,
     },
-    themeLabel: {
-      flex: 1,
-      fontSize: 16,
-      color: colors.text,
+    colorDot: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      marginRight: 8,
     },
-    checkIcon: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    colorsContainer: {
+    navRight: {
       flexDirection: "row",
-      flexWrap: "wrap",
-      padding: 12,
-      gap: 12,
-    },
-    colorOption: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      justifyContent: "center",
       alignItems: "center",
-      borderWidth: 3,
-      borderColor: "transparent",
-    },
-    colorOptionSelected: {
-      borderColor: colors.text,
-    },
-    colorInner: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    colorName: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      textAlign: "center",
-      marginTop: 4,
-    },
-    previewCard: {
-      backgroundColor: colors.card,
-      borderRadius: 16,
-      padding: 16,
-      ...Platform.select({
-        ios: {
-          shadowColor: colors.shadowColor,
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.1,
-          shadowRadius: 8,
-        },
-        android: {
-          elevation: 3,
-        },
-      }),
-    },
-    previewTitle: {
-      fontSize: 14,
-      fontWeight: "600",
-      color: colors.textSecondary,
-      marginBottom: 16,
-    },
-    previewChat: {
-      backgroundColor: colors.backgroundChat,
-      borderRadius: 12,
-      padding: 12,
-    },
-    previewBubbleMine: {
-      alignSelf: "flex-end",
-      backgroundColor: colors.messageMine,
-      borderRadius: 16,
-      borderBottomRightRadius: 4,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      maxWidth: "75%",
-      marginBottom: 8,
-    },
-    previewBubbleOther: {
-      alignSelf: "flex-start",
-      backgroundColor: colors.messageOther,
-      borderRadius: 16,
-      borderBottomLeftRadius: 4,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      maxWidth: "75%",
-    },
-    previewText: {
-      fontSize: 15,
-      color: colors.text,
-    },
-    previewTime: {
-      fontSize: 11,
-      color: colors.textSecondary,
-      marginTop: 4,
-      textAlign: "right",
-    },
-    menuPreviewArea: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 12,
-      marginTop: 8,
-    },
-    menuPreviewItem: {
-      alignItems: "center",
-      width: 70,
-    },
-    menuPreviewIcon: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      justifyContent: "center",
-      alignItems: "center",
-      marginBottom: 6,
-    },
-    menuPreviewText: {
-      fontSize: 11,
-      color: colors.text,
-      textAlign: "center",
     },
   });
 
@@ -274,94 +147,9 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Theme Mode */}
+        {/* Chats & Privacy */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Тема приложения</Text>
-          <View style={styles.card}>
-            {themeModes.map((theme, index) => (
-              <TouchableOpacity
-                key={theme.mode}
-                style={[
-                  styles.themeOption,
-                  index === themeModes.length - 1 && styles.themeOptionLast,
-                ]}
-                onPress={() => setThemeMode(theme.mode)}
-              >
-                <View
-                  style={[
-                    styles.themeIcon,
-                    {
-                      backgroundColor:
-                        themeMode === theme.mode
-                          ? colors.primary + "20"
-                          : colors.surface,
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name={theme.icon}
-                    size={20}
-                    color={
-                      themeMode === theme.mode
-                        ? colors.primary
-                        : colors.textSecondary
-                    }
-                  />
-                </View>
-                <Text style={styles.themeLabel}>{theme.label}</Text>
-                {themeMode === theme.mode && (
-                  <View
-                    style={[
-                      styles.checkIcon,
-                      { backgroundColor: colors.primary },
-                    ]}
-                  >
-                    <Ionicons name="checkmark" size={16} color="#fff" />
-                  </View>
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        {/* Accent Color */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Цвет чата</Text>
-          <View style={styles.card}>
-            <View style={styles.colorsContainer}>
-              {accentColors.map((color) => (
-                <TouchableOpacity
-                  key={color.primary}
-                  onPress={() => setAccentColor(color)}
-                >
-                  <View
-                    style={[
-                      styles.colorOption,
-                      accentColor.primary === color.primary &&
-                        styles.colorOptionSelected,
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.colorInner,
-                        { backgroundColor: color.primary },
-                      ]}
-                    >
-                      {accentColor.primary === color.primary && (
-                        <Ionicons name="checkmark" size={24} color="#fff" />
-                      )}
-                    </View>
-                  </View>
-                  <Text style={styles.colorName}>{color.name}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        </View>
-
-        {/* Navigation Links */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Чаты и конфиденциальность</Text>
+          <Text style={styles.sectionTitle}>Чаты</Text>
           <View style={styles.card}>
             {/* Folders */}
             <TouchableOpacity
@@ -376,11 +164,14 @@ export default function SettingsScreen() {
               >
                 <Ionicons
                   name="folder-outline"
-                  size={20}
+                  size={22}
                   color={colors.primary}
                 />
               </View>
-              <Text style={styles.navLabel}>Папки чатов</Text>
+              <View style={styles.navContent}>
+                <Text style={styles.navLabel}>Папки чатов</Text>
+                <Text style={styles.navValue}>Организация чатов</Text>
+              </View>
               <Ionicons
                 name="chevron-forward"
                 size={20}
@@ -394,9 +185,14 @@ export default function SettingsScreen() {
               onPress={() => router.push("/blocked-users")}
             >
               <View style={[styles.navIcon, { backgroundColor: "#FEE2E2" }]}>
-                <Ionicons name="ban-outline" size={20} color="#DC2626" />
+                <Ionicons name="ban-outline" size={22} color="#DC2626" />
               </View>
-              <Text style={styles.navLabel}>Черный список</Text>
+              <View style={styles.navContent}>
+                <Text style={styles.navLabel}>Чёрный список</Text>
+                <Text style={styles.navValue}>
+                  Заблокированные пользователи
+                </Text>
+              </View>
               <Ionicons
                 name="chevron-forward"
                 size={20}
@@ -406,102 +202,45 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Preview */}
+        {/* Appearance */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Предпросмотр</Text>
-          <View style={styles.previewCard}>
-            <Text style={styles.previewTitle}>Как будет выглядеть чат:</Text>
-            <View style={styles.previewChat}>
-              <View style={styles.previewBubbleOther}>
-                <Text style={styles.previewText}>Привет! Как дела? 👋</Text>
-                <Text style={styles.previewTime}>10:30</Text>
+          <Text style={styles.sectionTitle}>Оформление</Text>
+          <View style={styles.card}>
+            {/* Theme & Colors */}
+            <TouchableOpacity
+              style={[styles.navItem, styles.navItemLast]}
+              onPress={() => router.push("/appearance")}
+            >
+              <View
+                style={[
+                  styles.navIcon,
+                  { backgroundColor: accentColor.primaryLight },
+                ]}
+              >
+                <Ionicons
+                  name="color-palette-outline"
+                  size={22}
+                  color={accentColor.primary}
+                />
               </View>
-              <View style={styles.previewBubbleMine}>
-                <Text style={styles.previewText}>Отлично! А у тебя?</Text>
-                <Text style={styles.previewTime}>10:31 ✓✓</Text>
+              <View style={styles.navContent}>
+                <Text style={styles.navLabel}>Тема и цвета</Text>
+                <Text style={styles.navValue}>{getThemeText()}</Text>
               </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Menu Actions Preview */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Меню действий</Text>
-          <View style={styles.previewCard}>
-            <Text style={styles.previewTitle}>При нажатии на сообщение:</Text>
-            <View style={styles.menuPreviewArea}>
-              {/* Reply */}
-              <View style={styles.menuPreviewItem}>
+              <View style={styles.navRight}>
                 <View
                   style={[
-                    styles.menuPreviewIcon,
-                    { backgroundColor: isDark ? "#4A6741" : "#E8F5E9" },
+                    styles.colorDot,
+                    { backgroundColor: accentColor.primary },
                   ]}
-                >
-                  <Ionicons
-                    name="arrow-undo-outline"
-                    size={18}
-                    color={isDark ? "#A5D6A7" : "#43A047"}
-                  />
-                </View>
-                <Text style={styles.menuPreviewText}>Ответить</Text>
+                />
+                <Ionicons
+                  name="chevron-forward"
+                  size={20}
+                  color={colors.textSecondary}
+                />
               </View>
-              {/* Copy */}
-              <View style={styles.menuPreviewItem}>
-                <View
-                  style={[
-                    styles.menuPreviewIcon,
-                    { backgroundColor: isDark ? "#3D5A80" : "#E3F2FD" },
-                  ]}
-                >
-                  <Ionicons
-                    name="copy-outline"
-                    size={18}
-                    color={isDark ? "#90CAF9" : "#1976D2"}
-                  />
-                </View>
-                <Text style={styles.menuPreviewText}>Копировать</Text>
-              </View>
-              {/* Edit */}
-              <View style={styles.menuPreviewItem}>
-                <View
-                  style={[
-                    styles.menuPreviewIcon,
-                    { backgroundColor: isDark ? "#5D4E6D" : "#F3E5F5" },
-                  ]}
-                >
-                  <Ionicons
-                    name="pencil-outline"
-                    size={18}
-                    color={isDark ? "#CE93D8" : "#8E24AA"}
-                  />
-                </View>
-                <Text style={styles.menuPreviewText}>Редактир.</Text>
-              </View>
-              {/* Delete */}
-              <View style={styles.menuPreviewItem}>
-                <View
-                  style={[
-                    styles.menuPreviewIcon,
-                    { backgroundColor: isDark ? "#5D3A3A" : "#FFEBEE" },
-                  ]}
-                >
-                  <Ionicons
-                    name="trash-outline"
-                    size={18}
-                    color={isDark ? "#EF9A9A" : "#E53935"}
-                  />
-                </View>
-                <Text
-                  style={[
-                    styles.menuPreviewText,
-                    { color: isDark ? "#EF9A9A" : "#E53935" },
-                  ]}
-                >
-                  Удалить
-                </Text>
-              </View>
-            </View>
+            </TouchableOpacity>
           </View>
         </View>
 

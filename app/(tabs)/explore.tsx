@@ -274,13 +274,13 @@ export default function ProfileScreen() {
       <View style={[styles.card, { backgroundColor: colors.card }]}>
         <View style={styles.cardHeader}>
           <Ionicons
-            name="settings-outline"
+            name="apps-outline"
             size={18}
             color={colors.textPrimary}
             style={{ marginRight: 8 }}
           />
           <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>
-            Настройки
+            Общее
           </Text>
         </View>
 
@@ -300,13 +300,13 @@ export default function ProfileScreen() {
               ]}
             >
               <Ionicons
-                name="color-palette-outline"
+                name="settings-outline"
                 size={18}
                 color={colors.primary}
               />
             </View>
             <Text style={[styles.menuItemText, { color: colors.textPrimary }]}>
-              Тема и цвета
+              Настройки
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />

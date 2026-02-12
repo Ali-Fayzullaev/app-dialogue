@@ -67,6 +67,7 @@ export interface Database {
           user_id: string;
           joined_at: string;
           role: "admin" | "member";
+          is_archived: boolean;
         };
         Insert: {
           id?: string;
@@ -74,6 +75,7 @@ export interface Database {
           user_id: string;
           joined_at?: string;
           role?: "admin" | "member";
+          is_archived?: boolean;
         };
         Update: {
           id?: string;
@@ -81,6 +83,7 @@ export interface Database {
           user_id?: string;
           joined_at?: string;
           role?: "admin" | "member";
+          is_archived?: boolean;
         };
         Relationships: [];
       };

@@ -12,6 +12,7 @@ import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useRef, useState } from "react";
 import {
+    Alert,
     Animated,
     FlatList,
     Image,
@@ -25,12 +26,17 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import {
+    GestureHandlerRootView,
+    Swipeable,
+} from "react-native-gesture-handler";
 
 interface ChatItem extends Chat {
   members: Profile[];
   last_message: Message | null;
   unread_count: number;
   other_user_online: boolean;
+  is_archived: boolean;
 }
 
 export default function ChatsScreen() {
@@ -38,6 +44,9 @@ export default function ChatsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [isLoadingFromCache, setIsLoadingFromCache] = useState(true);
   const [showFabMenu, setShowFabMenu] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [selectedChat, setSelectedChat] = useState<ChatItem | null>(null);
+  const [showChatMenu, setShowChatMenu] = useState(false);
   const [viewingAvatar, setViewingAvatar] = useState<{
     url: string | null;
     name: string;
@@ -90,6 +99,131 @@ export default function ChatsScreen() {
     setShowFabMenu(false);
   };
 
+  // Архивация/разархивация чата
+  const toggleArchiveChat = async (chat: ChatItem) => {
+    if (!user) return;
+
+    try {
+      const newArchivedState = !chat.is_archived;
+
+      const { error } = await supabase
+        .from("chat_members")
+        .update({ is_archived: newArchivedState })
+        .eq("chat_id", chat.id)
+        .eq("user_id", user.id);
+
+      if (error) throw error;
+
+      // Обновляем локальный список чатов
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chat.id ? { ...c, is_archived: newArchivedState } : c,
+        ),
+      );
+
+      if (Platform.OS !== "web") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (error) {
+      console.error("Error toggling archive:", error);
+    }
+
+    setShowChatMenu(false);
+    setSelectedChat(null);
+  };
+
+  const handleChatLongPress = (chat: ChatItem) => {
+    if (Platform.OS !== "web") {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+    setSelectedChat(chat);
+    setShowChatMenu(true);
+  };
+
+  // Удаление чата (выход из чата)
+  const deleteChat = async (chat: ChatItem, showConfirm = true) => {
+    if (!user) return;
+
+    const performDelete = async () => {
+      try {
+        // Удаляем пользователя из участников чата
+        const { error } = await supabase
+          .from("chat_members")
+          .delete()
+          .eq("chat_id", chat.id)
+          .eq("user_id", user.id);
+
+        if (error) throw error;
+
+        // Удаляем чат из локального списка
+        setChats((prev) => prev.filter((c) => c.id !== chat.id));
+
+        if (Platform.OS !== "web") {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+      } catch (error) {
+        console.error("Error deleting chat:", error);
+      }
+    };
+
+    if (showConfirm) {
+      Alert.alert(
+        "Удалить чат",
+        "Вы уверены, что хотите удалить этот чат? Это действие нельзя отменить.",
+        [
+          { text: "Отмена", style: "cancel" },
+          { text: "Удалить", style: "destructive", onPress: performDelete },
+        ],
+      );
+    } else {
+      await performDelete();
+    }
+  };
+
+  // Отметить как непрочитанный / прочитанный
+  const toggleReadStatus = async (chat: ChatItem) => {
+    if (!user) return;
+
+    try {
+      if (chat.unread_count > 0) {
+        // Отметить как прочитанные все сообщения
+        const { error } = await supabase
+          .from("messages")
+          .update({ is_read: true })
+          .eq("chat_id", chat.id)
+          .neq("sender_id", user.id)
+          .eq("is_read", false);
+
+        if (error) throw error;
+
+        setChats((prev) =>
+          prev.map((c) => (c.id === chat.id ? { ...c, unread_count: 0 } : c)),
+        );
+      } else {
+        // Отметить как непрочитанный - увеличиваем счетчик
+        setChats((prev) =>
+          prev.map((c) => (c.id === chat.id ? { ...c, unread_count: 1 } : c)),
+        );
+      }
+
+      if (Platform.OS !== "web") {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
+    } catch (error) {
+      console.error("Error toggling read status:", error);
+    }
+  };
+
+  // Refs для Swipeable
+  const swipeableRefs = useRef<Map<string, Swipeable | null>>(new Map());
+
+  const closeSwipeable = (chatId: string) => {
+    const ref = swipeableRefs.current.get(chatId);
+    if (ref) {
+      ref.close();
+    }
+  };
+
   // Загрузка из кеша (мгновенно)
   const loadFromCache = async () => {
     const cachedChats = await cacheService.getCachedChats();
@@ -122,6 +256,7 @@ export default function ChatsScreen() {
           : null,
         unread_count: cached.unread_count,
         other_user_online: false,
+        is_archived: false, // Кеш не хранит архивный статус
       }));
       setChats(chatItems);
     }
@@ -140,7 +275,7 @@ export default function ChatsScreen() {
     try {
       const { data: chatMembers, error: memberError } = await supabase
         .from("chat_members")
-        .select("chat_id")
+        .select("chat_id, is_archived")
         .eq("user_id", user.id);
 
       if (memberError) throw memberError;
@@ -150,6 +285,10 @@ export default function ChatsScreen() {
         return;
       }
 
+      // Создаем Map для быстрого доступа к is_archived
+      const archivedMap = new Map(
+        chatMembers.map((cm) => [cm.chat_id, cm.is_archived ?? false]),
+      );
       const chatIds = chatMembers.map((cm) => cm.chat_id);
 
       const { data: chatsData, error: chatsError } = await supabase
@@ -211,6 +350,7 @@ export default function ChatsScreen() {
             last_message: lastMessages?.[0] || null,
             unread_count: unreadCount || 0,
             other_user_online: otherUserOnline,
+            is_archived: archivedMap.get(chat.id) || false,
           };
         }),
       );
@@ -333,342 +473,659 @@ export default function ChatsScreen() {
       });
     };
 
+    // Правые действия (свайп влево): Архив, Удалить
+    const renderRightActions = () => (
+      <View style={styles.swipeActionsRight}>
+        <TouchableOpacity
+          style={[styles.swipeAction, styles.swipeActionArchive]}
+          onPress={() => {
+            closeSwipeable(item.id);
+            toggleArchiveChat(item);
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={item.is_archived ? "arrow-undo" : "archive"}
+            size={22}
+            color="#fff"
+          />
+          <Text style={styles.swipeActionText}>
+            {item.is_archived ? "Вернуть" : "Архив"}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.swipeAction, styles.swipeActionDelete]}
+          onPress={() => {
+            closeSwipeable(item.id);
+            deleteChat(item);
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="trash" size={22} color="#fff" />
+          <Text style={styles.swipeActionText}>Удалить</Text>
+        </TouchableOpacity>
+      </View>
+    );
+
+    // Левые действия (свайп вправо): Прочитано/Непрочитано
+    const renderLeftActions = () => (
+      <View style={styles.swipeActionsLeft}>
+        <TouchableOpacity
+          style={[
+            styles.swipeAction,
+            item.unread_count > 0
+              ? styles.swipeActionRead
+              : styles.swipeActionUnread,
+          ]}
+          onPress={() => {
+            closeSwipeable(item.id);
+            toggleReadStatus(item);
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={item.unread_count > 0 ? "checkmark-done" : "mail-unread"}
+            size={22}
+            color="#fff"
+          />
+          <Text style={styles.swipeActionText}>
+            {item.unread_count > 0 ? "Прочитано" : "Не прочит."}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+
     return (
-      <TouchableOpacity
-        style={[styles.chatItem, { borderBottomColor: colors.borderLight }]}
-        onPress={handlePress}
-        activeOpacity={0.7}
+      <Swipeable
+        ref={(ref) => {
+          swipeableRefs.current.set(item.id, ref);
+        }}
+        renderRightActions={renderRightActions}
+        renderLeftActions={renderLeftActions}
+        rightThreshold={40}
+        leftThreshold={40}
+        friction={2}
+        overshootLeft={false}
+        overshootRight={false}
       >
-        <TouchableOpacity onPress={handleAvatarPress} activeOpacity={0.8}>
-          <View style={styles.avatarWrapper}>
-            {isGroup ? (
-              // Group avatar
-              item.avatar_url ? (
+        <TouchableOpacity
+          style={[
+            styles.chatItem,
+            {
+              backgroundColor: colors.background,
+              borderBottomColor: colors.borderLight,
+            },
+          ]}
+          onPress={handlePress}
+          onLongPress={() => handleChatLongPress(item)}
+          delayLongPress={300}
+          activeOpacity={0.7}
+        >
+          <TouchableOpacity onPress={handleAvatarPress} activeOpacity={0.8}>
+            <View style={styles.avatarWrapper}>
+              {isGroup ? (
+                // Group avatar
+                item.avatar_url ? (
+                  <Image
+                    source={{ uri: item.avatar_url }}
+                    style={styles.avatarImage}
+                  />
+                ) : (
+                  <View
+                    style={[styles.avatar, { backgroundColor: avatarColor }]}
+                  >
+                    <Ionicons name="people" size={22} color="#fff" />
+                  </View>
+                )
+              ) : otherMember?.avatar_url ? (
                 <Image
-                  source={{ uri: item.avatar_url }}
+                  source={{ uri: otherMember.avatar_url }}
                   style={styles.avatarImage}
                 />
               ) : (
                 <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-                  <Ionicons name="people" size={22} color="#fff" />
+                  <Text style={styles.avatarText}>
+                    {getChatName(item).charAt(0).toUpperCase()}
+                  </Text>
                 </View>
-              )
-            ) : otherMember?.avatar_url ? (
-              <Image
-                source={{ uri: otherMember.avatar_url }}
-                style={styles.avatarImage}
-              />
-            ) : (
-              <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-                <Text style={styles.avatarText}>
-                  {getChatName(item).charAt(0).toUpperCase()}
+              )}
+              {!isGroup && item.other_user_online && (
+                <View style={styles.onlineIndicator} />
+              )}
+            </View>
+          </TouchableOpacity>
+          <View style={styles.chatInfo}>
+            <View style={styles.chatHeader}>
+              <View style={styles.chatNameRow}>
+                {isGroup && (
+                  <Ionicons
+                    name="people"
+                    size={14}
+                    color={colors.textMuted}
+                    style={{ marginRight: 4 }}
+                  />
+                )}
+                <Text
+                  style={[styles.chatName, { color: colors.text }]}
+                  numberOfLines={1}
+                >
+                  {getChatName(item)}
                 </Text>
               </View>
-            )}
-            {!isGroup && item.other_user_online && (
-              <View style={styles.onlineIndicator} />
-            )}
-          </View>
-        </TouchableOpacity>
-        <View style={styles.chatInfo}>
-          <View style={styles.chatHeader}>
-            <View style={styles.chatNameRow}>
-              {isGroup && (
-                <Ionicons
-                  name="people"
-                  size={14}
-                  color={colors.textMuted}
-                  style={{ marginRight: 4 }}
-                />
-              )}
+              <View style={styles.chatHeaderRight}>
+                {item.last_message && (
+                  <Text
+                    style={[
+                      styles.chatTime,
+                      { color: colors.textSecondary },
+                      item.unread_count > 0 && { color: colors.primary },
+                    ]}
+                  >
+                    {formatTime(item.last_message.created_at)}
+                  </Text>
+                )}
+              </View>
+            </View>
+            <View style={styles.chatFooter}>
               <Text
-                style={[styles.chatName, { color: colors.text }]}
+                style={[
+                  styles.lastMessage,
+                  { color: colors.textSecondary },
+                  item.unread_count > 0 && {
+                    color: colors.text,
+                    fontWeight: "500",
+                  },
+                ]}
                 numberOfLines={1}
               >
-                {getChatName(item)}
+                {isGroup && item.last_message
+                  ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `
+                  : ""}
+                {item.last_message?.media_type
+                  ? item.last_message.media_type === "image"
+                    ? "Фото"
+                    : item.last_message.media_type === "video"
+                      ? "Видео"
+                      : item.last_message.media_type === "audio"
+                        ? "Аудио"
+                        : item.last_message.media_type === "location"
+                          ? "Геолокация"
+                          : item.last_message.media_type === "file"
+                            ? "Документ"
+                            : item.last_message?.content || "Нет сообщений"
+                  : item.last_message?.content || "Нет сообщений"}
               </Text>
-            </View>
-            <View style={styles.chatHeaderRight}>
-              {item.last_message && (
-                <Text
+              {item.unread_count > 0 && (
+                <View
                   style={[
-                    styles.chatTime,
-                    { color: colors.textSecondary },
-                    item.unread_count > 0 && { color: colors.primary },
+                    styles.unreadBadge,
+                    { backgroundColor: colors.primary },
                   ]}
                 >
-                  {formatTime(item.last_message.created_at)}
-                </Text>
+                  <Text style={styles.unreadBadgeText}>
+                    {item.unread_count > 99 ? "99+" : item.unread_count}
+                  </Text>
+                </View>
               )}
             </View>
           </View>
-          <View style={styles.chatFooter}>
-            <Text
-              style={[
-                styles.lastMessage,
-                { color: colors.textSecondary },
-                item.unread_count > 0 && {
-                  color: colors.text,
-                  fontWeight: "500",
-                },
-              ]}
-              numberOfLines={1}
-            >
-              {isGroup && item.last_message
-                ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `
-                : ""}
-              {item.last_message?.media_type
-                ? item.last_message.media_type === "image"
-                  ? "Фото"
-                  : item.last_message.media_type === "video"
-                    ? "Видео"
-                    : item.last_message.media_type === "audio"
-                      ? "Аудио"
-                      : item.last_message.media_type === "location"
-                        ? "Геолокация"
-                        : item.last_message.media_type === "file"
-                          ? "Документ"
-                          : item.last_message?.content || "Нет сообщений"
-                : item.last_message?.content || "Нет сообщений"}
-            </Text>
-            {item.unread_count > 0 && (
-              <View
-                style={[
-                  styles.unreadBadge,
-                  { backgroundColor: colors.primary },
-                ]}
-              >
-                <Text style={styles.unreadBadgeText}>
-                  {item.unread_count > 99 ? "99+" : item.unread_count}
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </Swipeable>
     );
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <StatusBar
-        barStyle={colors.text === "#1a1a1a" ? "dark-content" : "light-content"}
-      />
-
-      {/* Офлайн баннер */}
-      <OfflineBanner />
-
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.background }]}>
-        <Text style={[styles.headerTitle, { color: colors.text }]}>Чаты</Text>
-        <View style={{ width: 44 }} />
-      </View>
-
-      {/* Search Bar - navigates to global search */}
-      <TouchableOpacity
-        style={[styles.searchContainer, { backgroundColor: colors.background }]}
-        onPress={() => {
-          if (Platform.OS !== "web") {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <StatusBar
+          barStyle={
+            colors.text === "#1a1a1a" ? "dark-content" : "light-content"
           }
-          router.push("/search");
-        }}
-        activeOpacity={0.7}
-      >
-        <View
-          style={[
-            styles.searchBar,
-            { backgroundColor: colors.inputBackground },
-          ]}
-        >
-          <Ionicons
-            name="search"
-            size={18}
-            color={colors.textMuted}
-            style={{ marginRight: 8 }}
-          />
-          <Text style={[styles.searchPlaceholder, { color: colors.textMuted }]}>
-            Поиск по всем чатам
-          </Text>
-        </View>
-      </TouchableOpacity>
+        />
 
-      {/* Chat List */}
-      {chats.length === 0 ? (
-        <View style={styles.emptyContainer}>
+        {/* Офлайн баннер */}
+        <OfflineBanner />
+
+        {/* Header */}
+        <View style={[styles.header, { backgroundColor: colors.background }]}>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Чаты</Text>
+          <View style={{ width: 44 }} />
+        </View>
+
+        {/* Search Bar - navigates to global search */}
+        <TouchableOpacity
+          style={[
+            styles.searchContainer,
+            { backgroundColor: colors.background },
+          ]}
+          onPress={() => {
+            if (Platform.OS !== "web") {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            }
+            router.push("/search");
+          }}
+          activeOpacity={0.7}
+        >
           <View
-            style={[styles.emptyIcon, { backgroundColor: colors.primaryLight }]}
+            style={[
+              styles.searchBar,
+              { backgroundColor: colors.inputBackground },
+            ]}
           >
             <Ionicons
-              name="chatbubbles-outline"
-              size={48}
-              color={colors.primary}
+              name="search"
+              size={18}
+              color={colors.textMuted}
+              style={{ marginRight: 8 }}
             />
+            <Text
+              style={[styles.searchPlaceholder, { color: colors.textMuted }]}
+            >
+              Поиск по всем чатам
+            </Text>
           </View>
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>
-            Нет чатов
-          </Text>
-          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            Начните общение, нажав на кнопку выше
-          </Text>
+        </TouchableOpacity>
+
+        {/* Archived Chats Toggle */}
+        {/* Archived Chats Toggle - показываем если есть архивные чаты ИЛИ если мы в режиме архива */}
+        {(chats.filter((c) => c.is_archived).length > 0 || showArchived) && (
           <TouchableOpacity
             style={[
-              styles.startChatButton,
-              { backgroundColor: colors.primary },
+              styles.archivedToggle,
+              {
+                backgroundColor: showArchived
+                  ? colors.primaryLight
+                  : colors.inputBackground,
+                borderBottomColor: colors.borderLight,
+              },
             ]}
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              router.push("/new-chat");
+              if (Platform.OS !== "web") {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }
+              setShowArchived(!showArchived);
             }}
-            activeOpacity={0.8}
+            activeOpacity={0.7}
           >
-            <Text style={styles.startChatButtonText}>Новый чат</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <FlatList
-          data={chats}
-          renderItem={renderChat}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContainer}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.primary}
-            />
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      )}
-
-      {/* FAB Button */}
-      <Animated.View
-        style={[
-          styles.fab,
-          {
-            transform: [
-              {
-                rotate: fabRotation.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ["0deg", "45deg"],
-                }),
-              },
-            ],
-          },
-        ]}
-      >
-        <TouchableOpacity
-          style={[styles.fabButton, { backgroundColor: colors.primary }]}
-          onPress={toggleFabMenu}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="add" size={28} color="#fff" />
-        </TouchableOpacity>
-      </Animated.View>
-
-      {/* FAB Menu */}
-      <Modal visible={showFabMenu} transparent animationType="none">
-        <Pressable style={styles.fabOverlay} onPress={closeFabMenu}>
-          <Animated.View
-            style={[
-              styles.fabMenu,
-              { backgroundColor: colors.card },
-              {
-                transform: [{ scale: menuScale }],
-                opacity: menuScale,
-              },
-            ]}
-          >
-            <TouchableOpacity
-              style={styles.fabMenuItem}
-              onPress={() => {
-                closeFabMenu();
-                router.push("/new-chat");
-              }}
-              activeOpacity={0.7}
-            >
-              <View
+            <View style={styles.archivedToggleContent}>
+              <Ionicons
+                name={showArchived ? "arrow-back" : "archive"}
+                size={20}
+                color={showArchived ? colors.primary : colors.textMuted}
+              />
+              <Text
                 style={[
-                  styles.fabMenuIcon,
-                  { backgroundColor: colors.primary },
+                  styles.archivedToggleText,
+                  { color: showArchived ? colors.primary : colors.text },
                 ]}
               >
-                <Ionicons name="person" size={20} color="#fff" />
-              </View>
-              <Text style={[styles.fabMenuText, { color: colors.text }]}>
-                Новый чат
+                {showArchived ? "Назад к чатам" : "Архив"}
               </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.fabMenuItem}
-              onPress={() => {
-                closeFabMenu();
-                router.push("/group/create");
-              }}
-              activeOpacity={0.7}
-            >
-              <View
-                style={[styles.fabMenuIcon, { backgroundColor: "#FF9500" }]}
-              >
-                <Ionicons name="people" size={20} color="#fff" />
-              </View>
-              <Text style={[styles.fabMenuText, { color: colors.text }]}>
-                Новая группа
-              </Text>
-            </TouchableOpacity>
-          </Animated.View>
-        </Pressable>
-      </Modal>
-
-      {/* Avatar Viewer Modal */}
-      <Modal
-        visible={!!viewingAvatar}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setViewingAvatar(null)}
-      >
-        <View style={styles.avatarViewerOverlay}>
-          <TouchableOpacity
-            style={styles.avatarViewerCloseButton}
-            onPress={() => setViewingAvatar(null)}
-          >
-            <Ionicons name="close" size={28} color="#fff" />
-          </TouchableOpacity>
-
-          {viewingAvatar?.url ? (
-            <Image
-              source={{ uri: viewingAvatar.url }}
-              style={styles.avatarViewerImage}
-              resizeMode="contain"
+              {!showArchived &&
+                chats.filter((c) => c.is_archived).length > 0 && (
+                  <View
+                    style={[
+                      styles.archivedBadge,
+                      {
+                        backgroundColor: colors.textMuted,
+                      },
+                    ]}
+                  >
+                    <Text style={styles.archivedBadgeText}>
+                      {chats.filter((c) => c.is_archived).length}
+                    </Text>
+                  </View>
+                )}
+            </View>
+            <Ionicons
+              name={showArchived ? "chevron-up" : "chevron-down"}
+              size={20}
+              color={colors.textMuted}
             />
-          ) : (
+          </TouchableOpacity>
+        )}
+
+        {/* Chat List */}
+        {chats.filter((c) => (showArchived ? c.is_archived : !c.is_archived))
+          .length === 0 ? (
+          <View style={styles.emptyContainer}>
             <View
               style={[
-                styles.avatarViewerPlaceholder,
-                { backgroundColor: viewingAvatar?.color || colors.primary },
+                styles.emptyIcon,
+                { backgroundColor: colors.primaryLight },
               ]}
             >
-              {viewingAvatar?.isGroup ? (
-                <Ionicons name="people" size={80} color="#fff" />
-              ) : (
-                <Text style={styles.avatarViewerPlaceholderText}>
-                  {viewingAvatar?.name?.charAt(0).toUpperCase()}
-                </Text>
-              )}
+              <Ionicons
+                name={showArchived ? "archive-outline" : "chatbubbles-outline"}
+                size={48}
+                color={colors.primary}
+              />
             </View>
-          )}
-
-          <View style={styles.avatarViewerInfo}>
-            <Text style={styles.avatarViewerName}>{viewingAvatar?.name}</Text>
-            {viewingAvatar?.isOnline && (
-              <Text style={styles.avatarViewerSubtitleOnline}>В сети</Text>
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>
+              {showArchived ? "Архив пуст" : "Нет чатов"}
+            </Text>
+            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+              {showArchived
+                ? "Зажмите чат чтобы добавить в архив"
+                : "Начните общение, нажав на кнопку выше"}
+            </Text>
+            {showArchived ? (
+              <TouchableOpacity
+                style={[
+                  styles.startChatButton,
+                  { backgroundColor: colors.primary },
+                ]}
+                onPress={() => {
+                  if (Platform.OS !== "web") {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  }
+                  setShowArchived(false);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.startChatButtonText}>Назад к чатам</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[
+                  styles.startChatButton,
+                  { backgroundColor: colors.primary },
+                ]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  router.push("/new-chat");
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.startChatButtonText}>Новый чат</Text>
+              </TouchableOpacity>
             )}
           </View>
-        </View>
-      </Modal>
-    </View>
+        ) : (
+          <FlatList
+            data={chats.filter((c) =>
+              showArchived ? c.is_archived : !c.is_archived,
+            )}
+            renderItem={renderChat}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.listContainer}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={colors.primary}
+              />
+            }
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+
+        {/* FAB Button */}
+        <Animated.View
+          style={[
+            styles.fab,
+            {
+              transform: [
+                {
+                  rotate: fabRotation.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ["0deg", "45deg"],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={[styles.fabButton, { backgroundColor: colors.primary }]}
+            onPress={toggleFabMenu}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="add" size={28} color="#fff" />
+          </TouchableOpacity>
+        </Animated.View>
+
+        {/* FAB Menu */}
+        <Modal visible={showFabMenu} transparent animationType="none">
+          <Pressable style={styles.fabOverlay} onPress={closeFabMenu}>
+            <Animated.View
+              style={[
+                styles.fabMenu,
+                { backgroundColor: colors.card },
+                {
+                  transform: [{ scale: menuScale }],
+                  opacity: menuScale,
+                },
+              ]}
+            >
+              <TouchableOpacity
+                style={styles.fabMenuItem}
+                onPress={() => {
+                  closeFabMenu();
+                  router.push("/new-chat");
+                }}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.fabMenuIcon,
+                    { backgroundColor: colors.primary },
+                  ]}
+                >
+                  <Ionicons name="person" size={20} color="#fff" />
+                </View>
+                <Text style={[styles.fabMenuText, { color: colors.text }]}>
+                  Новый чат
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.fabMenuItem}
+                onPress={() => {
+                  closeFabMenu();
+                  router.push("/group/create");
+                }}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[styles.fabMenuIcon, { backgroundColor: "#FF9500" }]}
+                >
+                  <Ionicons name="people" size={20} color="#fff" />
+                </View>
+                <Text style={[styles.fabMenuText, { color: colors.text }]}>
+                  Новая группа
+                </Text>
+              </TouchableOpacity>
+            </Animated.View>
+          </Pressable>
+        </Modal>
+
+        {/* Avatar Viewer Modal */}
+        <Modal
+          visible={!!viewingAvatar}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setViewingAvatar(null)}
+        >
+          <View style={styles.avatarViewerOverlay}>
+            <TouchableOpacity
+              style={styles.avatarViewerCloseButton}
+              onPress={() => setViewingAvatar(null)}
+            >
+              <Ionicons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+
+            {viewingAvatar?.url ? (
+              <Image
+                source={{ uri: viewingAvatar.url }}
+                style={styles.avatarViewerImage}
+                resizeMode="contain"
+              />
+            ) : (
+              <View
+                style={[
+                  styles.avatarViewerPlaceholder,
+                  { backgroundColor: viewingAvatar?.color || colors.primary },
+                ]}
+              >
+                {viewingAvatar?.isGroup ? (
+                  <Ionicons name="people" size={80} color="#fff" />
+                ) : (
+                  <Text style={styles.avatarViewerPlaceholderText}>
+                    {viewingAvatar?.name?.charAt(0).toUpperCase()}
+                  </Text>
+                )}
+              </View>
+            )}
+
+            <View style={styles.avatarViewerInfo}>
+              <Text style={styles.avatarViewerName}>{viewingAvatar?.name}</Text>
+              {viewingAvatar?.isOnline && (
+                <Text style={styles.avatarViewerSubtitleOnline}>В сети</Text>
+              )}
+            </View>
+          </View>
+        </Modal>
+
+        {/* Chat Action Menu Modal */}
+        <Modal
+          visible={showChatMenu}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            setShowChatMenu(false);
+            setSelectedChat(null);
+          }}
+        >
+          <Pressable
+            style={styles.chatMenuOverlay}
+            onPress={() => {
+              setShowChatMenu(false);
+              setSelectedChat(null);
+            }}
+          >
+            <View
+              style={[
+                styles.chatMenuContainer,
+                { backgroundColor: colors.card },
+              ]}
+            >
+              <Text
+                style={[styles.chatMenuTitle, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {selectedChat && getChatName(selectedChat)}
+              </Text>
+
+              {/* Прочитано / Непрочитано */}
+              <TouchableOpacity
+                style={styles.chatMenuItem}
+                onPress={() => {
+                  if (selectedChat) {
+                    toggleReadStatus(selectedChat);
+                    setShowChatMenu(false);
+                    setSelectedChat(null);
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.chatMenuIconCircle,
+                    { backgroundColor: "#007AFF" },
+                  ]}
+                >
+                  <Ionicons
+                    name={
+                      selectedChat?.unread_count &&
+                      selectedChat.unread_count > 0
+                        ? "checkmark-done"
+                        : "mail-unread"
+                    }
+                    size={18}
+                    color="#fff"
+                  />
+                </View>
+                <Text style={[styles.chatMenuItemText, { color: colors.text }]}>
+                  {selectedChat?.unread_count && selectedChat.unread_count > 0
+                    ? "Прочитано"
+                    : "Непрочитано"}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Архивировать */}
+              <TouchableOpacity
+                style={styles.chatMenuItem}
+                onPress={() => selectedChat && toggleArchiveChat(selectedChat)}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.chatMenuIconCircle,
+                    { backgroundColor: "#FF9500" },
+                  ]}
+                >
+                  <Ionicons
+                    name={selectedChat?.is_archived ? "arrow-undo" : "archive"}
+                    size={18}
+                    color="#fff"
+                  />
+                </View>
+                <Text style={[styles.chatMenuItemText, { color: colors.text }]}>
+                  {selectedChat?.is_archived
+                    ? "Разархивировать"
+                    : "Архивировать"}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Удалить */}
+              <TouchableOpacity
+                style={styles.chatMenuItem}
+                onPress={() => {
+                  if (selectedChat) {
+                    setShowChatMenu(false);
+                    setSelectedChat(null);
+                    deleteChat(selectedChat, true);
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.chatMenuIconCircle,
+                    { backgroundColor: "#FF3B30" },
+                  ]}
+                >
+                  <Ionicons name="trash" size={18} color="#fff" />
+                </View>
+                <Text style={[styles.chatMenuItemText, { color: "#FF3B30" }]}>
+                  Удалить чат
+                </Text>
+              </TouchableOpacity>
+
+              {/* Отмена */}
+              <TouchableOpacity
+                style={[styles.chatMenuItem, styles.chatMenuItemCancel]}
+                onPress={() => {
+                  setShowChatMenu(false);
+                  setSelectedChat(null);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.chatMenuItemText,
+                    { color: colors.textMuted, textAlign: "center" },
+                  ]}
+                >
+                  Отмена
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Modal>
+      </View>
+    </GestureHandlerRootView>
   );
 }
 
@@ -949,5 +1406,120 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#81C784",
     fontWeight: "500",
+  },
+  // Archived Toggle
+  archivedToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    marginHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  archivedToggleContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  archivedToggleText: {
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  archivedBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 6,
+  },
+  archivedBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  // Chat Menu Modal
+  chatMenuOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 40,
+  },
+  chatMenuContainer: {
+    width: "100%",
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  chatMenuTitle: {
+    fontSize: 17,
+    fontWeight: "600",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  chatMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    gap: 14,
+  },
+  chatMenuItemText: {
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  chatMenuIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  chatMenuItemCancel: {
+    marginTop: 8,
+    paddingTop: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(0,0,0,0.1)",
+    justifyContent: "center",
+  },
+  // Swipe Actions
+  swipeActionsRight: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  swipeActionsLeft: {
+    flexDirection: "row",
+    alignItems: "stretch",
+  },
+  swipeAction: {
+    width: 80,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+  swipeActionArchive: {
+    backgroundColor: "#FF9500",
+  },
+  swipeActionDelete: {
+    backgroundColor: "#FF3B30",
+  },
+  swipeActionRead: {
+    backgroundColor: "#007AFF",
+  },
+  swipeActionUnread: {
+    backgroundColor: "#34C759",
+  },
+  swipeActionText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 4,
   },
 });

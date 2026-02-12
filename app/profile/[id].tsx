@@ -101,10 +101,16 @@ export default function UserProfileScreen() {
   const [showMediaActions, setShowMediaActions] = useState(false);
   const menuAnimation = useRef(new Animated.Value(0)).current;
 
+  // Blocked state
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [blockLoading, setBlockLoading] = useState(false);
+  const isOwnProfile = user?.id === id;
+
   useEffect(() => {
     if (id) {
       fetchProfile();
       fetchSharedMedia();
+      checkBlockStatus();
     }
 
     return () => {
@@ -114,6 +120,138 @@ export default function UserProfileScreen() {
       }
     };
   }, [id]);
+
+  const checkBlockStatus = async () => {
+    if (!user || !id || user.id === id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from("blocked_users")
+        .select("id")
+        .eq("blocker_id", user.id)
+        .eq("blocked_id", id)
+        .maybeSingle();
+
+      if (!error) {
+        setIsBlocked(!!data);
+      }
+    } catch (error) {
+      console.error("Error checking block status:", error);
+    }
+  };
+
+  const toggleBlock = async () => {
+    if (!user || !id || blockLoading) return;
+
+    const action = isBlocked ? "Разблокировать" : "Заблокировать";
+    const confirmText = isBlocked
+      ? `Разблокировать пользователя ${profile?.username}?`
+      : `Заблокировать пользователя ${profile?.username}? Он не сможет отправлять вам сообщения.`;
+
+    Alert.alert(action, confirmText, [
+      { text: "Отмена", style: "cancel" },
+      {
+        text: action,
+        style: isBlocked ? "default" : "destructive",
+        onPress: async () => {
+          setBlockLoading(true);
+          try {
+            if (isBlocked) {
+              // Разблокировать
+              const { error } = await supabase
+                .from("blocked_users")
+                .delete()
+                .eq("blocker_id", user.id)
+                .eq("blocked_id", id);
+
+              if (error) throw error;
+              setIsBlocked(false);
+            } else {
+              // Заблокировать
+              const { error } = await supabase.from("blocked_users").insert({
+                blocker_id: user.id,
+                blocked_id: id,
+              });
+
+              if (error) throw error;
+              setIsBlocked(true);
+            }
+
+            if (Platform.OS !== "web") {
+              Haptics.notificationAsync(
+                isBlocked
+                  ? Haptics.NotificationFeedbackType.Success
+                  : Haptics.NotificationFeedbackType.Warning,
+              );
+            }
+          } catch (error) {
+            console.error("Error toggling block:", error);
+            Alert.alert("Ошибка", "Не удалось выполнить действие");
+          } finally {
+            setBlockLoading(false);
+          }
+        },
+      },
+    ]);
+  };
+
+  const startChat = async () => {
+    if (!user || !id) return;
+
+    try {
+      // Ищем существующий личный чат
+      const { data: myChats } = await supabase
+        .from("chat_members")
+        .select("chat_id")
+        .eq("user_id", user.id);
+
+      const { data: theirChats } = await supabase
+        .from("chat_members")
+        .select("chat_id")
+        .eq("user_id", id);
+
+      if (myChats && theirChats) {
+        const myIds = myChats.map((c) => c.chat_id);
+        const theirIds = theirChats.map((c) => c.chat_id);
+        const commonIds = myIds.filter((chatId) => theirIds.includes(chatId));
+
+        // Проверяем какой из общих чатов - личный (не группа)
+        for (const chatId of commonIds) {
+          const { data: chat } = await supabase
+            .from("chats")
+            .select("is_group")
+            .eq("id", chatId)
+            .single();
+
+          if (chat && !chat.is_group) {
+            // Нашли личный чат
+            router.push(`/chat/${chatId}`);
+            return;
+          }
+        }
+      }
+
+      // Создаём новый чат
+      const { data: newChat, error: chatError } = await supabase
+        .from("chats")
+        .insert({ is_group: false })
+        .select()
+        .single();
+
+      if (chatError) throw chatError;
+
+      // Добавляем участников
+      await supabase.from("chat_members").insert([
+        { chat_id: newChat.id, user_id: user.id },
+        { chat_id: newChat.id, user_id: id },
+      ]);
+
+      router.push(`/chat/${newChat.id}`);
+    } catch (error) {
+      console.error("Error starting chat:", error);
+      Alert.alert("Ошибка", "Не удалось начать чат");
+    }
+  };
 
   const fetchProfile = async () => {
     try {
@@ -762,6 +900,51 @@ export default function UserProfileScreen() {
           <Text style={[styles.joinDate, { color: colors.textMuted }]}>
             В приложении с {formatDate(profile.created_at)}
           </Text>
+
+          {/* Action Buttons - Only for other users */}
+          {!isOwnProfile && (
+            <View style={styles.actionButtons}>
+              <TouchableOpacity
+                style={[
+                  styles.messageButton,
+                  { backgroundColor: colors.primary },
+                ]}
+                onPress={startChat}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="chatbubble-outline" size={20} color="#fff" />
+                <Text style={styles.messageButtonText}>Написать</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.blockButton,
+                  {
+                    backgroundColor: isBlocked
+                      ? colors.inputBackground
+                      : "#FEE2E2",
+                    borderColor: isBlocked ? colors.border : "#FCA5A5",
+                  },
+                ]}
+                onPress={toggleBlock}
+                disabled={blockLoading}
+                activeOpacity={0.8}
+              >
+                {blockLoading ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={isBlocked ? colors.textMuted : "#DC2626"}
+                  />
+                ) : (
+                  <Ionicons
+                    name={isBlocked ? "lock-open-outline" : "ban-outline"}
+                    size={20}
+                    color={isBlocked ? colors.textMuted : "#DC2626"}
+                  />
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
         {/* Stats */}
@@ -1374,6 +1557,33 @@ const styles = StyleSheet.create({
   },
   joinDate: {
     fontSize: 14,
+  },
+  actionButtons: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 20,
+    gap: 12,
+  },
+  messageButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 24,
+    gap: 8,
+  },
+  messageButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  blockButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
   },
   statsContainer: {
     flexDirection: "row",

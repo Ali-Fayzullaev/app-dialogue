@@ -98,6 +98,7 @@ export default function ChatScreen() {
   const skipAutoScrollRef = useRef(false);
   const router = useRouter();
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const blockChannelRef = useRef<RealtimeChannel | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
@@ -176,6 +177,10 @@ export default function ChatScreen() {
     otherUser?.id || null,
   );
 
+  // Блокировка пользователя
+  const [isBlocked, setIsBlocked] = useState(false); // Я заблокировал собеседника
+  const [isBlockedByOther, setIsBlockedByOther] = useState(false); // Собеседник заблокировал меня
+
   // Анимация точек печатания
   useEffect(() => {
     if (typingUsers.length > 0) {
@@ -219,10 +224,15 @@ export default function ChatScreen() {
     fetchMessages();
     fetchPinnedMessages();
     subscribeToMessages();
+    checkBlockStatus();
+    subscribeToBlockStatus();
 
     return () => {
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
+      }
+      if (blockChannelRef.current) {
+        supabase.removeChannel(blockChannelRef.current);
       }
       if (soundRef.current) {
         soundRef.current.unloadAsync();
@@ -335,6 +345,167 @@ export default function ChatScreen() {
     } catch (error) {
       console.error("Error fetching chat info:", error);
     }
+  };
+
+  // Проверка блокировки между пользователями
+  const checkBlockStatus = async () => {
+    if (!user || !id || isGroup) return;
+
+    try {
+      // Получаем участников чата
+      const { data: members } = await supabase
+        .from("chat_members")
+        .select("user_id")
+        .eq("chat_id", id);
+
+      const otherMemberIds =
+        members?.filter((m) => m.user_id !== user.id).map((m) => m.user_id) ||
+        [];
+      if (otherMemberIds.length === 0) return;
+
+      const otherUserId = otherMemberIds[0];
+
+      // Проверяем заблокировал ли я его
+      const { data: blockedByMe } = await supabase
+        .from("blocked_users")
+        .select("id")
+        .eq("blocker_id", user.id)
+        .eq("blocked_id", otherUserId)
+        .maybeSingle();
+
+      setIsBlocked(!!blockedByMe);
+
+      // Проверяем заблокировал ли он меня
+      const { data: blockedByOther } = await supabase
+        .from("blocked_users")
+        .select("id")
+        .eq("blocker_id", otherUserId)
+        .eq("blocked_id", user.id)
+        .maybeSingle();
+
+      setIsBlockedByOther(!!blockedByOther);
+    } catch (error) {
+      console.error("Error checking block status:", error);
+    }
+  };
+
+  // Realtime подписка на изменения блокировки
+  const subscribeToBlockStatus = () => {
+    if (!user || !id || isGroup) return;
+
+    // Подписываемся на изменения в таблице blocked_users
+    blockChannelRef.current = supabase
+      .channel(`block-status:${id}:${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // INSERT, UPDATE, DELETE
+          schema: "public",
+          table: "blocked_users",
+        },
+        async (payload) => {
+          // Получаем другого участника чата
+          const { data: members } = await supabase
+            .from("chat_members")
+            .select("user_id")
+            .eq("chat_id", id);
+
+          const otherMemberIds =
+            members
+              ?.filter((m) => m.user_id !== user.id)
+              .map((m) => m.user_id) || [];
+          if (otherMemberIds.length === 0) return;
+
+          const otherUserId = otherMemberIds[0];
+
+          if (payload.eventType === "INSERT") {
+            const newBlock = payload.new as {
+              blocker_id: string;
+              blocked_id: string;
+            };
+
+            // Проверяем касается ли это нас
+            if (
+              newBlock.blocker_id === user.id &&
+              newBlock.blocked_id === otherUserId
+            ) {
+              // Я заблокировал собеседника
+              setIsBlocked(true);
+              safeNotificationHaptic(Haptics.NotificationFeedbackType.Warning);
+            } else if (
+              newBlock.blocker_id === otherUserId &&
+              newBlock.blocked_id === user.id
+            ) {
+              // Собеседник заблокировал меня
+              setIsBlockedByOther(true);
+              safeNotificationHaptic(Haptics.NotificationFeedbackType.Warning);
+            }
+          } else if (payload.eventType === "DELETE") {
+            const oldBlock = payload.old as {
+              blocker_id?: string;
+              blocked_id?: string;
+            };
+
+            // Если старые данные пришли (REPLICA IDENTITY FULL включен)
+            if (oldBlock.blocker_id && oldBlock.blocked_id) {
+              // Проверяем касается ли это нас
+              if (
+                oldBlock.blocker_id === user.id &&
+                oldBlock.blocked_id === otherUserId
+              ) {
+                // Я разблокировал собеседника
+                setIsBlocked(false);
+                safeNotificationHaptic(
+                  Haptics.NotificationFeedbackType.Success,
+                );
+              } else if (
+                oldBlock.blocker_id === otherUserId &&
+                oldBlock.blocked_id === user.id
+              ) {
+                // Собеседник разблокировал меня
+                setIsBlockedByOther(false);
+                safeNotificationHaptic(
+                  Haptics.NotificationFeedbackType.Success,
+                );
+              }
+            } else {
+              // Fallback: если старые данные не пришли, перепроверяем статус
+              // Проверяем заблокировал ли я его
+              const { data: blockedByMe } = await supabase
+                .from("blocked_users")
+                .select("id")
+                .eq("blocker_id", user.id)
+                .eq("blocked_id", otherUserId)
+                .maybeSingle();
+
+              const wasBlocked = isBlocked;
+              setIsBlocked(!!blockedByMe);
+
+              // Проверяем заблокировал ли он меня
+              const { data: blockedByOther } = await supabase
+                .from("blocked_users")
+                .select("id")
+                .eq("blocker_id", otherUserId)
+                .eq("blocked_id", user.id)
+                .maybeSingle();
+
+              const wasBlockedByOther = isBlockedByOther;
+              setIsBlockedByOther(!!blockedByOther);
+
+              // Haptic если статус изменился на разблокированный
+              if (
+                (wasBlocked && !blockedByMe) ||
+                (wasBlockedByOther && !blockedByOther)
+              ) {
+                safeNotificationHaptic(
+                  Haptics.NotificationFeedbackType.Success,
+                );
+              }
+            }
+          }
+        },
+      )
+      .subscribe();
   };
 
   const fetchMessages = async () => {
@@ -1110,6 +1281,17 @@ export default function ChatScreen() {
   const sendMessage = async () => {
     if (!newMessage.trim() || !user || !id || sending) return;
 
+    // Проверка блокировки
+    if (isBlocked || isBlockedByOther) {
+      Alert.alert(
+        "Блокировка",
+        isBlocked
+          ? "Вы заблокировали этого пользователя. Разблокируйте, чтобы отправить сообщение."
+          : "Этот пользователь вас заблокировал.",
+      );
+      return;
+    }
+
     safeHaptic(Haptics.ImpactFeedbackStyle.Light);
     setSending(true);
     const messageText = newMessage.trim();
@@ -1479,6 +1661,17 @@ export default function ChatScreen() {
   };
 
   const startRecording = async () => {
+    // Проверка блокировки
+    if (isBlocked || isBlockedByOther) {
+      Alert.alert(
+        "Блокировка",
+        isBlocked
+          ? "Вы заблокировали этого пользователя. Разблокируйте, чтобы отправить сообщение."
+          : "Этот пользователь вас заблокировал.",
+      );
+      return;
+    }
+
     if (Platform.OS === "web") {
       Alert.alert("Недоступно", "Запись аудио недоступна в веб-версии");
       return;
@@ -1621,6 +1814,17 @@ export default function ChatScreen() {
   const handleSendLocation = async () => {
     setShowAttachMenu(false);
 
+    // Проверка блокировки
+    if (isBlocked || isBlockedByOther) {
+      Alert.alert(
+        "Блокировка",
+        isBlocked
+          ? "Вы заблокировали этого пользователя. Разблокируйте, чтобы отправить сообщение."
+          : "Этот пользователь вас заблокировал.",
+      );
+      return;
+    }
+
     if (Platform.OS === "web") {
       Alert.alert("Недоступно", "Геолокация недоступна в веб-версии");
       return;
@@ -1694,6 +1898,17 @@ export default function ChatScreen() {
   // Выбор и отправка документа
   const handlePickDocument = async () => {
     setShowAttachMenu(false);
+
+    // Проверка блокировки
+    if (isBlocked || isBlockedByOther) {
+      Alert.alert(
+        "Блокировка",
+        isBlocked
+          ? "Вы заблокировали этого пользователя. Разблокируйте, чтобы отправить сообщение."
+          : "Этот пользователь вас заблокировал.",
+      );
+      return;
+    }
 
     if (Platform.OS === "web") {
       Alert.alert("Недоступно", "Отправка файлов недоступна в веб-версии");
@@ -1874,6 +2089,17 @@ export default function ChatScreen() {
 
   const sendMediaMessage = async (uri: string, mimeType: string) => {
     if (!user || !id || uploading) return;
+
+    // Проверка блокировки
+    if (isBlocked || isBlockedByOther) {
+      Alert.alert(
+        "Блокировка",
+        isBlocked
+          ? "Вы заблокировали этого пользователя. Разблокируйте, чтобы отправить сообщение."
+          : "Этот пользователь вас заблокировал.",
+      );
+      return;
+    }
 
     setUploading(true);
     safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
@@ -3143,120 +3369,200 @@ export default function ChatScreen() {
         </View>
       )}
 
-      {/* Input */}
-      <View
-        style={[
-          styles.inputContainer,
-          { backgroundColor: colors.background, borderTopColor: colors.border },
-        ]}
-      >
-        {isRecording ? (
-          /* Recording UI - Professional design */
-          <View style={styles.recordingWrapper}>
-            <TouchableOpacity
-              style={styles.cancelRecordingButton}
-              onPress={cancelRecording}
-            >
-              <Ionicons name="trash-outline" size={22} color={colors.error} />
-            </TouchableOpacity>
-
-            <View style={styles.recordingIndicator}>
-              <Animated.View
+      {/* Blocked User Banner */}
+      {!isGroup && (isBlocked || isBlockedByOther) ? (
+        <View
+          style={[
+            styles.blockedBanner,
+            {
+              backgroundColor: colors.background,
+              borderTopColor: colors.border,
+            },
+          ]}
+        >
+          <View
+            style={[
+              styles.blockedContent,
+              { backgroundColor: isDark ? "#3D2A2A" : "#FEF2F2" },
+            ]}
+          >
+            <Ionicons
+              name="ban-outline"
+              size={22}
+              color={isDark ? "#F87171" : "#DC2626"}
+            />
+            <View style={styles.blockedTextContainer}>
+              <Text
                 style={[
-                  styles.recordingDot,
-                  { transform: [{ scale: recordButtonScale }] },
+                  styles.blockedTitle,
+                  { color: isDark ? "#F87171" : "#DC2626" },
                 ]}
-              />
-              <Text style={styles.recordingText}>
-                {Math.floor(recordingDuration / 60)}:
-                {(recordingDuration % 60).toString().padStart(2, "0")}
+              >
+                {isBlockedByOther
+                  ? "Вы заблокированы"
+                  : "Пользователь заблокирован"}
+              </Text>
+              <Text
+                style={[
+                  styles.blockedSubtitle,
+                  { color: colors.textSecondary },
+                ]}
+              >
+                {isBlockedByOther
+                  ? "Этот пользователь вас заблокировал"
+                  : "Вы не можете отправлять сообщения"}
               </Text>
             </View>
-
-            {/* Send Recording Button */}
-            <TouchableOpacity
-              style={styles.sendRecordingButton}
-              onPress={stopRecording}
-            >
-              <Ionicons name="send" size={20} color={colors.textLight} />
-            </TouchableOpacity>
-          </View>
-        ) : (
-          /* Normal Input UI */
-          <>
-            {/* Plus/Attach Button */}
-            <TouchableOpacity
-              style={styles.attachButton}
-              onPress={openMediaPicker}
-              disabled={uploading}
-            >
-              {uploading ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
-                <Ionicons name="add" size={26} color={colors.primary} />
-              )}
-            </TouchableOpacity>
-
-            <View
-              style={[
-                styles.inputWrapper,
-                { backgroundColor: colors.inputBackground },
-              ]}
-            >
-              <TextInput
-                style={[styles.input, { color: colors.text }]}
-                value={newMessage}
-                onChangeText={(text) => {
-                  setNewMessage(text);
-                  if (text.trim()) {
-                    sendTypingIndicator(true);
-                  }
-                }}
-                onBlur={() => sendTypingIndicator(false)}
-                placeholder="Сообщение..."
-                placeholderTextColor={colors.textMuted}
-                multiline
-                maxLength={1000}
-              />
-            </View>
-
-            {/* Send or Mic Button */}
-            {newMessage.trim() || editingMessage ? (
+            {isBlocked && (
               <TouchableOpacity
                 style={[
-                  styles.sendButton,
-                  editingMessage && styles.editSendButton,
+                  styles.unblockButton,
+                  { backgroundColor: colors.primary },
                 ]}
-                onPress={sendMessage}
-                disabled={sending}
-                activeOpacity={0.7}
+                onPress={async () => {
+                  if (!user || !otherUser) return;
+                  try {
+                    const { error } = await supabase
+                      .from("blocked_users")
+                      .delete()
+                      .eq("blocker_id", user.id)
+                      .eq("blocked_id", otherUser.id);
+
+                    if (!error) {
+                      setIsBlocked(false);
+                      safeNotificationHaptic(
+                        Haptics.NotificationFeedbackType.Success,
+                      );
+                    }
+                  } catch (err) {
+                    console.error("Error unblocking:", err);
+                  }
+                }}
               >
-                {sending ? (
-                  <ActivityIndicator size="small" color={colors.textLight} />
+                <Text style={styles.unblockButtonText}>Разблокировать</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      ) : (
+        /* Input */
+        <View
+          style={[
+            styles.inputContainer,
+            {
+              backgroundColor: colors.background,
+              borderTopColor: colors.border,
+            },
+          ]}
+        >
+          {isRecording ? (
+            /* Recording UI - Professional design */
+            <View style={styles.recordingWrapper}>
+              <TouchableOpacity
+                style={styles.cancelRecordingButton}
+                onPress={cancelRecording}
+              >
+                <Ionicons name="trash-outline" size={22} color={colors.error} />
+              </TouchableOpacity>
+
+              <View style={styles.recordingIndicator}>
+                <Animated.View
+                  style={[
+                    styles.recordingDot,
+                    { transform: [{ scale: recordButtonScale }] },
+                  ]}
+                />
+                <Text style={styles.recordingText}>
+                  {Math.floor(recordingDuration / 60)}:
+                  {(recordingDuration % 60).toString().padStart(2, "0")}
+                </Text>
+              </View>
+
+              {/* Send Recording Button */}
+              <TouchableOpacity
+                style={styles.sendRecordingButton}
+                onPress={stopRecording}
+              >
+                <Ionicons name="send" size={20} color={colors.textLight} />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            /* Normal Input UI */
+            <>
+              {/* Plus/Attach Button */}
+              <TouchableOpacity
+                style={styles.attachButton}
+                onPress={openMediaPicker}
+                disabled={uploading}
+              >
+                {uploading ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
                 ) : (
-                  <Ionicons
-                    name={editingMessage ? "checkmark" : "send"}
-                    size={20}
-                    color={colors.textLight}
-                  />
+                  <Ionicons name="add" size={26} color={colors.primary} />
                 )}
               </TouchableOpacity>
-            ) : (
-              <Pressable
-                onPressIn={onMicPressIn}
-                onPressOut={onMicPressOut}
-                style={styles.micButton}
+
+              <View
+                style={[
+                  styles.inputWrapper,
+                  { backgroundColor: colors.inputBackground },
+                ]}
               >
-                <Animated.View
-                  style={{ transform: [{ scale: recordButtonScale }] }}
+                <TextInput
+                  style={[styles.input, { color: colors.text }]}
+                  value={newMessage}
+                  onChangeText={(text) => {
+                    setNewMessage(text);
+                    if (text.trim()) {
+                      sendTypingIndicator(true);
+                    }
+                  }}
+                  onBlur={() => sendTypingIndicator(false)}
+                  placeholder="Сообщение..."
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                  maxLength={1000}
+                />
+              </View>
+
+              {/* Send or Mic Button */}
+              {newMessage.trim() || editingMessage ? (
+                <TouchableOpacity
+                  style={[
+                    styles.sendButton,
+                    editingMessage && styles.editSendButton,
+                  ]}
+                  onPress={sendMessage}
+                  disabled={sending}
+                  activeOpacity={0.7}
                 >
-                  <Ionicons name="mic" size={24} color={colors.textLight} />
-                </Animated.View>
-              </Pressable>
-            )}
-          </>
-        )}
-      </View>
+                  {sending ? (
+                    <ActivityIndicator size="small" color={colors.textLight} />
+                  ) : (
+                    <Ionicons
+                      name={editingMessage ? "checkmark" : "send"}
+                      size={20}
+                      color={colors.textLight}
+                    />
+                  )}
+                </TouchableOpacity>
+              ) : (
+                <Pressable
+                  onPressIn={onMicPressIn}
+                  onPressOut={onMicPressOut}
+                  style={styles.micButton}
+                >
+                  <Animated.View
+                    style={{ transform: [{ scale: recordButtonScale }] }}
+                  >
+                    <Ionicons name="mic" size={24} color={colors.textLight} />
+                  </Animated.View>
+                </Pressable>
+              )}
+            </>
+          )}
+        </View>
+      )}
 
       {/* Media Picker Modal - WhatsApp Style */}
       <Modal
@@ -4236,6 +4542,39 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     alignItems: "flex-end",
     borderTopWidth: 1,
+  },
+  blockedBanner: {
+    padding: 12,
+    paddingBottom: 24,
+    borderTopWidth: 1,
+  },
+  blockedContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    borderRadius: 12,
+    gap: 12,
+  },
+  blockedTextContainer: {
+    flex: 1,
+  },
+  blockedTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  blockedSubtitle: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  unblockButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  unblockButtonText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "600",
   },
   attachButton: {
     width: 44,

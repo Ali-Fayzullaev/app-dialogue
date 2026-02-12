@@ -105,6 +105,29 @@ export default function SettingsScreen() {
     themeOptionLast: {
       borderBottomWidth: 0,
     },
+    navItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      padding: 16,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.borderLight,
+    },
+    navItemLast: {
+      borderBottomWidth: 0,
+    },
+    navIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      justifyContent: "center",
+      alignItems: "center",
+      marginRight: 12,
+    },
+    navLabel: {
+      flex: 1,
+      fontSize: 16,
+      color: colors.text,
+    },
     themeIcon: {
       width: 40,
       height: 40,
@@ -333,6 +356,53 @@ export default function SettingsScreen() {
                 </TouchableOpacity>
               ))}
             </View>
+          </View>
+        </View>
+
+        {/* Navigation Links */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Чаты и конфиденциальность</Text>
+          <View style={styles.card}>
+            {/* Folders */}
+            <TouchableOpacity
+              style={styles.navItem}
+              onPress={() => router.push("/folders")}
+            >
+              <View
+                style={[
+                  styles.navIcon,
+                  { backgroundColor: colors.primary + "20" },
+                ]}
+              >
+                <Ionicons
+                  name="folder-outline"
+                  size={20}
+                  color={colors.primary}
+                />
+              </View>
+              <Text style={styles.navLabel}>Папки чатов</Text>
+              <Ionicons
+                name="chevron-forward"
+                size={20}
+                color={colors.textSecondary}
+              />
+            </TouchableOpacity>
+
+            {/* Blocked Users */}
+            <TouchableOpacity
+              style={[styles.navItem, styles.navItemLast]}
+              onPress={() => router.push("/blocked-users")}
+            >
+              <View style={[styles.navIcon, { backgroundColor: "#FEE2E2" }]}>
+                <Ionicons name="ban-outline" size={20} color="#DC2626" />
+              </View>
+              <Text style={styles.navLabel}>Черный список</Text>
+              <Ionicons
+                name="chevron-forward"
+                size={20}
+                color={colors.textSecondary}
+              />
+            </TouchableOpacity>
           </View>
         </View>
 

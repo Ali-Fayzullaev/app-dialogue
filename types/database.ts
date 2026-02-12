@@ -307,6 +307,30 @@ export interface Database {
         };
         Relationships: [];
       };
+      blocked_users: {
+        Row: {
+          id: string;
+          blocker_id: string;
+          blocked_id: string;
+          reason: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          blocker_id: string;
+          blocked_id: string;
+          reason?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          blocker_id?: string;
+          blocked_id?: string;
+          reason?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: {};
     Functions: {};
@@ -381,4 +405,12 @@ export type ChatFolderItem =
 export interface ChatFolderWithCount extends ChatFolder {
   chat_count: number;
   chat_ids: string[];
+}
+
+// Заблокированные пользователи
+export type BlockedUser = Database["public"]["Tables"]["blocked_users"]["Row"];
+
+// Заблокированный пользователь с профилем
+export interface BlockedUserWithProfile extends BlockedUser {
+  profile: Profile;
 }

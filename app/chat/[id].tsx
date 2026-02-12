@@ -3,6 +3,9 @@ import {
   ReactionDisplay,
   ReactionUsersModal,
 } from "@/components/message-reactions";
+import VoiceMessageBubble, {
+  resetAudioMode,
+} from "@/components/voice-message-bubble";
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
@@ -86,6 +89,7 @@ export default function ChatScreen() {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const [liveMetering, setLiveMetering] = useState(0);
   const [chatName, setChatName] = useState("Чат");
   const [otherUser, setOtherUser] = useState<Profile | null>(null);
   const [isGroup, setIsGroup] = useState(false);
@@ -96,11 +100,14 @@ export default function ChatScreen() {
   const { colors, isDark } = useTheme();
   const flatListRef = useRef<FlatList>(null);
   const skipAutoScrollRef = useRef(false);
+  const isNearBottomRef = useRef(true);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   const router = useRouter();
   const channelRef = useRef<RealtimeChannel | null>(null);
   const blockChannelRef = useRef<RealtimeChannel | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const waveformDataRef = useRef<number[]>([]);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const [editingMessage, setEditingMessage] =
@@ -1684,14 +1691,34 @@ export default function ChatScreen() {
         return;
       }
 
+      // Сбрасываем кэш аудио-режима (после записи потребуется перенастройка для воспроизведения)
+      resetAudioMode();
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
+      const { recording } = await Audio.Recording.createAsync({
+        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        isMeteringEnabled: true,
+      });
+
+      // Сбрасываем waveform данные
+      waveformDataRef.current = [];
+
+      // Подписка на metering для сбора waveform
+      recording.setOnRecordingStatusUpdate((status) => {
+        if (status.isRecording && status.metering !== undefined) {
+          // Нормализуем dB (-160...0) к 0...1
+          const db = status.metering;
+          const normalized = Math.max(0, Math.min(1, (db + 60) / 60));
+          waveformDataRef.current.push(normalized);
+          setLiveMetering(normalized);
+        }
+      });
+      // Обновляем каждые 100мс
+      recording.setProgressUpdateInterval(100);
 
       recordingRef.current = recording;
       setIsRecording(true);
@@ -1719,12 +1746,18 @@ export default function ChatScreen() {
         recordingTimerRef.current = null;
       }
 
+      const finalDuration = recordingDuration;
       setIsRecording(false);
       setRecordingDuration(0);
+      setLiveMetering(0);
 
       await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
       recordingRef.current = null;
+
+      // Сохраняем waveform данные
+      const capturedWaveform = [...waveformDataRef.current];
+      waveformDataRef.current = [];
 
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
@@ -1732,7 +1765,7 @@ export default function ChatScreen() {
 
       if (uri) {
         safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-        await sendMediaMessage(uri, "audio/m4a");
+        await sendVoiceMessage(uri, capturedWaveform, finalDuration);
       }
     } catch (error) {
       console.error("Stop recording error:", error);
@@ -1799,8 +1832,10 @@ export default function ChatScreen() {
         recordingRef.current = null;
       }
 
+      waveformDataRef.current = [];
       setIsRecording(false);
       setRecordingDuration(0);
+      setLiveMetering(0);
 
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
@@ -2030,63 +2065,6 @@ export default function ChatScreen() {
     }
   };
 
-  const playAudio = async (messageId: string, audioUrl: string) => {
-    // На веб используем HTML5 Audio
-    if (Platform.OS === "web") {
-      try {
-        const audio = new window.Audio(audioUrl);
-        audio.play();
-        setPlayingAudioId(messageId);
-        audio.onended = () => setPlayingAudioId(null);
-      } catch (error) {
-        console.error("Web audio error:", error);
-      }
-      return;
-    }
-
-    try {
-      // Если уже играет это аудио - остановить
-      if (playingAudioId === messageId && soundRef.current) {
-        await soundRef.current.stopAsync();
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-        setPlayingAudioId(null);
-        return;
-      }
-
-      // Остановить предыдущее аудио
-      if (soundRef.current) {
-        await soundRef.current.stopAsync();
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-      });
-
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: audioUrl },
-        { shouldPlay: true },
-        (status) => {
-          if ("didJustFinish" in status && status.didJustFinish) {
-            setPlayingAudioId(null);
-            soundRef.current?.unloadAsync();
-            soundRef.current = null;
-          }
-        },
-      );
-
-      soundRef.current = sound;
-      setPlayingAudioId(messageId);
-      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-    } catch (error) {
-      console.error("Play audio error:", error);
-      Alert.alert("Ошибка", "Не удалось воспроизвести аудио");
-    }
-  };
-
   const sendMediaMessage = async (uri: string, mimeType: string) => {
     if (!user || !id || uploading) return;
 
@@ -2124,6 +2102,54 @@ export default function ChatScreen() {
     } catch (error) {
       console.error("Error sending media:", error);
       Alert.alert("Ошибка", "Не удалось отправить сообщение");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Отправка голосового сообщения с waveform данными
+  const sendVoiceMessage = async (
+    uri: string,
+    waveformData: number[],
+    durationSec: number,
+  ) => {
+    if (!user || !id || uploading) return;
+
+    if (isBlocked || isBlockedByOther) {
+      Alert.alert(
+        "Блокировка",
+        isBlocked
+          ? "Вы заблокировали этого пользователя. Разблокируйте, чтобы отправить сообщение."
+          : "Этот пользователь вас заблокировал.",
+      );
+      return;
+    }
+
+    setUploading(true);
+    safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
+
+    try {
+      const result = await uploadMedia(uri, user.id, "audio/m4a");
+
+      if (!result.success) {
+        Alert.alert("Ошибка", result.error || "Не удалось загрузить файл");
+        return;
+      }
+
+      const { error } = await supabase.from("messages").insert({
+        chat_id: id,
+        sender_id: user.id,
+        content: "",
+        media_url: result.url,
+        media_type: "audio" as const,
+        audio_waveform: waveformData,
+        audio_duration: durationSec,
+      });
+
+      if (error) throw error;
+    } catch (error) {
+      console.error("Error sending voice message:", error);
+      Alert.alert("Ошибка", "Не удалось отправить голосовое сообщение");
     } finally {
       setUploading(false);
     }
@@ -2170,14 +2196,15 @@ export default function ChatScreen() {
 
   // Функция подсветки найденного текста
   const highlightSearchText = (text: string, isMyMessage: boolean) => {
+    const myMessageTextColor = isMyMessage
+      ? isDark
+        ? "#fff"
+        : colors.text
+      : colors.text;
+
     if (!searchQuery || searchQuery.trim().length < 2) {
       return (
-        <Text
-          style={[
-            styles.messageText,
-            { color: isMyMessage ? "#fff" : colors.text },
-          ]}
-        >
+        <Text style={[styles.messageText, { color: myMessageTextColor }]}>
           {renderTextWithLinks(text, isMyMessage)}
         </Text>
       );
@@ -2189,12 +2216,7 @@ export default function ChatScreen() {
 
     if (index === -1) {
       return (
-        <Text
-          style={[
-            styles.messageText,
-            { color: isMyMessage ? "#fff" : colors.text },
-          ]}
-        >
+        <Text style={[styles.messageText, { color: myMessageTextColor }]}>
           {renderTextWithLinks(text, isMyMessage)}
         </Text>
       );
@@ -2205,12 +2227,7 @@ export default function ChatScreen() {
     const after = text.substring(index + searchQuery.length);
 
     return (
-      <Text
-        style={[
-          styles.messageText,
-          { color: isMyMessage ? "#fff" : colors.text },
-        ]}
-      >
+      <Text style={[styles.messageText, { color: myMessageTextColor }]}>
         {renderTextWithLinks(before, isMyMessage)}
         <Text style={styles.searchHighlight}>{match}</Text>
         {renderTextWithLinks(after, isMyMessage)}
@@ -2463,68 +2480,16 @@ export default function ChatScreen() {
                   </View>
                 )}
               {item.media_url && item.media_type === "audio" && (
-                <TouchableOpacity
-                  style={[
-                    styles.audioContainer,
-                    isMyMessage
-                      ? styles.myAudioContainer
-                      : styles.otherAudioContainer,
-                  ]}
-                  onPress={() => playAudio(item.id, item.media_url!)}
-                  activeOpacity={0.7}
-                >
-                  <View
-                    style={[
-                      styles.audioPlayButton,
-                      {
-                        backgroundColor: isMyMessage
-                          ? "rgba(255,255,255,0.25)"
-                          : colors.primary,
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name={playingAudioId === item.id ? "pause" : "play"}
-                      size={20}
-                      color={isMyMessage ? "#fff" : colors.textLight}
-                    />
-                  </View>
-                  <View style={styles.audioWaveform}>
-                    {[...Array(20)].map((_, i) => (
-                      <View
-                        key={i}
-                        style={[
-                          styles.audioWaveBar,
-                          {
-                            height: 4 + Math.random() * 16,
-                            backgroundColor: isMyMessage
-                              ? "rgba(255,255,255,0.5)"
-                              : isDark
-                                ? colors.textMuted
-                                : colors.border,
-                          },
-                          playingAudioId === item.id && {
-                            backgroundColor: isMyMessage
-                              ? "rgba(255,255,255,0.9)"
-                              : colors.primary,
-                          },
-                        ]}
-                      />
-                    ))}
-                  </View>
-                  <Text
-                    style={[
-                      styles.audioDuration,
-                      {
-                        color: isMyMessage
-                          ? "rgba(255,255,255,0.8)"
-                          : colors.textSecondary,
-                      },
-                    ]}
-                  >
-                    0:30
-                  </Text>
-                </TouchableOpacity>
+                <VoiceMessageBubble
+                  messageId={item.id}
+                  audioUrl={item.media_url}
+                  isMyMessage={isMyMessage}
+                  waveform={item.audio_waveform}
+                  duration={item.audio_duration}
+                  playingAudioId={playingAudioId}
+                  onPlayStateChange={setPlayingAudioId}
+                  soundRef={soundRef}
+                />
               )}
 
               {/* Location message */}
@@ -2623,7 +2588,11 @@ export default function ChatScreen() {
                       style={[
                         styles.fileName,
                         {
-                          color: isMyMessage ? "#fff" : colors.text,
+                          color: isMyMessage
+                            ? isDark
+                              ? "#fff"
+                              : colors.text
+                            : colors.text,
                         },
                       ]}
                       numberOfLines={1}
@@ -2635,7 +2604,9 @@ export default function ChatScreen() {
                         styles.fileSize,
                         {
                           color: isMyMessage
-                            ? "rgba(255,255,255,0.7)"
+                            ? isDark
+                              ? "rgba(255,255,255,0.7)"
+                              : colors.textSecondary
                             : colors.textSecondary,
                         },
                       ]}
@@ -2647,7 +2618,11 @@ export default function ChatScreen() {
                     name="download-outline"
                     size={22}
                     color={
-                      isMyMessage ? "rgba(255,255,255,0.8)" : colors.primary
+                      isMyMessage
+                        ? isDark
+                          ? "rgba(255,255,255,0.8)"
+                          : colors.primary
+                        : colors.primary
                     }
                   />
                 </TouchableOpacity>
@@ -3154,10 +3129,20 @@ export default function ChatScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.messagesList}
           onContentSizeChange={() => {
-            if (!skipAutoScrollRef.current) {
+            if (!skipAutoScrollRef.current && isNearBottomRef.current) {
               flatListRef.current?.scrollToEnd();
             }
           }}
+          onScroll={(e) => {
+            const { contentOffset, layoutMeasurement, contentSize } =
+              e.nativeEvent;
+            const distanceFromBottom =
+              contentSize.height - layoutMeasurement.height - contentOffset.y;
+            const nearBottom = distanceFromBottom < 150;
+            isNearBottomRef.current = nearBottom;
+            setShowScrollButton(!nearBottom);
+          }}
+          scrollEventThrottle={100}
           onScrollToIndexFailed={(info) => {
             const wait = new Promise((resolve) => setTimeout(resolve, 100));
             wait.then(() => {
@@ -3185,6 +3170,29 @@ export default function ChatScreen() {
             </View>
           }
         />
+
+        {/* Scroll to bottom button */}
+        {showScrollButton && (
+          <TouchableOpacity
+            style={[
+              styles.scrollToBottomButton,
+              {
+                backgroundColor: isDark ? "#2A3942" : "#ffffff",
+                shadowColor: colors.shadowColor,
+              },
+            ]}
+            onPress={() => {
+              flatListRef.current?.scrollToEnd({ animated: true });
+            }}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name="chevron-down"
+              size={22}
+              color={isDark ? "#e4e6eb" : "#1a1a1a"}
+            />
+          </TouchableOpacity>
+        )}
 
         {/* Typing Indicator */}
         {typingUsers.length > 0 && (
@@ -3456,7 +3464,7 @@ export default function ChatScreen() {
           ]}
         >
           {isRecording ? (
-            /* Recording UI - Professional design */
+            /* Recording UI - Professional design with live waveform */
             <View style={styles.recordingWrapper}>
               <TouchableOpacity
                 style={styles.cancelRecordingButton}
@@ -3465,25 +3473,59 @@ export default function ChatScreen() {
                 <Ionicons name="trash-outline" size={22} color={colors.error} />
               </TouchableOpacity>
 
-              <View style={styles.recordingIndicator}>
-                <Animated.View
-                  style={[
-                    styles.recordingDot,
-                    { transform: [{ scale: recordButtonScale }] },
-                  ]}
-                />
-                <Text style={styles.recordingText}>
-                  {Math.floor(recordingDuration / 60)}:
-                  {(recordingDuration % 60).toString().padStart(2, "0")}
-                </Text>
+              <View style={styles.recordingCenter}>
+                {/* Live waveform visualization */}
+                <View style={styles.liveWaveform}>
+                  {Array.from({ length: 20 }).map((_, i) => {
+                    // Разные бары реагируют с разной чувствительностью
+                    const sensitivity = 1 - Math.abs(i - 10) / 12;
+                    const jitter = Math.sin(Date.now() / 200 + i * 0.5) * 0.05;
+                    const height =
+                      3 + (liveMetering * sensitivity + jitter) * 20;
+                    return (
+                      <View
+                        key={i}
+                        style={[
+                          styles.liveWaveBar,
+                          {
+                            height: Math.max(3, Math.min(24, height)),
+                            backgroundColor: colors.primary,
+                            opacity: 0.4 + liveMetering * 0.6,
+                          },
+                        ]}
+                      />
+                    );
+                  })}
+                </View>
+
+                <View style={styles.recordingIndicator}>
+                  <Animated.View
+                    style={[
+                      styles.recordingDot,
+                      { transform: [{ scale: recordButtonScale }] },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.recordingText,
+                      { color: colors.textPrimary },
+                    ]}
+                  >
+                    {Math.floor(recordingDuration / 60)}:
+                    {(recordingDuration % 60).toString().padStart(2, "0")}
+                  </Text>
+                </View>
               </View>
 
               {/* Send Recording Button */}
               <TouchableOpacity
-                style={styles.sendRecordingButton}
+                style={[
+                  styles.sendRecordingButton,
+                  { backgroundColor: colors.primary },
+                ]}
                 onPress={stopRecording}
               >
-                <Ionicons name="send" size={20} color={colors.textLight} />
+                <Ionicons name="send" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
           ) : (
@@ -3530,7 +3572,11 @@ export default function ChatScreen() {
                 <TouchableOpacity
                   style={[
                     styles.sendButton,
-                    editingMessage && styles.editSendButton,
+                    {
+                      backgroundColor: editingMessage
+                        ? "#4CAF50"
+                        : colors.primary,
+                    },
                   ]}
                   onPress={sendMessage}
                   disabled={sending}
@@ -3550,7 +3596,10 @@ export default function ChatScreen() {
                 <Pressable
                   onPressIn={onMicPressIn}
                   onPressOut={onMicPressOut}
-                  style={styles.micButton}
+                  style={[
+                    styles.micButton,
+                    { backgroundColor: colors.primary },
+                  ]}
                 >
                   <Animated.View
                     style={{ transform: [{ scale: recordButtonScale }] }}
@@ -4454,6 +4503,22 @@ const styles = StyleSheet.create({
   messagesList: {
     padding: 16,
     flexGrow: 1,
+    justifyContent: "flex-end",
+  },
+  scrollToBottomButton: {
+    position: "absolute",
+    right: 16,
+    bottom: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+    zIndex: 10,
   },
   dateSeparator: {
     alignItems: "center",
@@ -5051,6 +5116,24 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingHorizontal: 4,
+  },
+  recordingCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    marginHorizontal: 8,
+  },
+  liveWaveform: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: 28,
+    gap: 2,
+    marginBottom: 4,
+  },
+  liveWaveBar: {
+    width: 3,
+    borderRadius: 1.5,
   },
   sendRecordingButton: {
     width: 44,

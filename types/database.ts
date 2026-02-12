@@ -106,6 +106,9 @@ export interface Database {
           // File fields
           file_name: string | null;
           file_size: number | null;
+          // Audio waveform data
+          audio_waveform: number[] | null;
+          audio_duration: number | null;
         };
         Insert: {
           id?: string;
@@ -123,6 +126,8 @@ export interface Database {
           location_name?: string | null;
           file_name?: string | null;
           file_size?: number | null;
+          audio_waveform?: number[] | null;
+          audio_duration?: number | null;
         };
         Update: {
           id?: string;
@@ -140,6 +145,8 @@ export interface Database {
           location_name?: string | null;
           file_name?: string | null;
           file_size?: number | null;
+          audio_waveform?: number[] | null;
+          audio_duration?: number | null;
         };
         Relationships: [];
       };

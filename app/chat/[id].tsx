@@ -12,11 +12,16 @@ import { supabase } from "@/lib/supabase";
 import { GroupedReaction, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import { RealtimeChannel } from "@supabase/supabase-js";
+import { decode } from "base64-arraybuffer";
 import { Audio, ResizeMode, Video } from "expo-av";
 import { BlurView } from "expo-blur";
 import * as Clipboard from "expo-clipboard";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
+import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import * as Sharing from "expo-sharing";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActionSheetIOS,
@@ -27,6 +32,7 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -36,6 +42,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { WebView } from "react-native-webview";
 
 interface MessageWithSender extends Message {
   sender: Profile | null;
@@ -43,7 +50,7 @@ interface MessageWithSender extends Message {
     id: string;
     content: string | null;
     sender: Profile | null;
-    media_type: "image" | "video" | "audio" | null;
+    media_type: "image" | "video" | "audio" | "location" | "file" | null;
   } | null;
   reactions?: GroupedReaction[];
 }
@@ -105,10 +112,22 @@ export default function ChatScreen() {
   const recordButtonScale = useRef(new Animated.Value(1)).current;
   const [showMediaPicker, setShowMediaPicker] = useState(false);
   const mediaPickerAnimation = useRef(new Animated.Value(0)).current;
+  const isPickingDocumentRef = useRef(false);
+
+  // Сброс флага при монтировании компонента
+  useEffect(() => {
+    isPickingDocumentRef.current = false;
+  }, []);
+
   const [fullscreenMedia, setFullscreenMedia] = useState<{
     url: string;
     type: "image" | "video";
   } | null>(null);
+  const [documentViewer, setDocumentViewer] = useState<{
+    url: string;
+    name: string;
+  } | null>(null);
+  const [documentLoading, setDocumentLoading] = useState(false);
   const [typingUsers, setTypingUsers] = useState<
     { id: string; username: string; avatar_url: string | null }[]
   >([]);
@@ -351,7 +370,7 @@ export default function ChatScreen() {
           id: string;
           content: string | null;
           sender_id: string;
-          media_type: "image" | "video" | "audio" | null;
+          media_type: "image" | "video" | "audio" | "location" | "file" | null;
         }
       >();
       if (replyToIds.length > 0) {
@@ -1403,6 +1422,8 @@ export default function ChatScreen() {
             "Фото из галереи",
             "Сделать фото",
             "Записать аудио",
+            "Геолокация",
+            "Документ",
           ],
           cancelButtonIndex: 0,
         },
@@ -1410,6 +1431,8 @@ export default function ChatScreen() {
           if (buttonIndex === 1) handlePickMedia();
           if (buttonIndex === 2) handleTakePhoto();
           if (buttonIndex === 3) handleRecordAudio();
+          if (buttonIndex === 4) handleSendLocation();
+          if (buttonIndex === 5) handlePickDocument();
         },
       );
     } else {
@@ -1594,6 +1617,204 @@ export default function ChatScreen() {
     }
   };
 
+  // Отправка геолокации
+  const handleSendLocation = async () => {
+    setShowAttachMenu(false);
+
+    if (Platform.OS === "web") {
+      Alert.alert("Недоступно", "Геолокация недоступна в веб-версии");
+      return;
+    }
+
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Нет доступа",
+          "Для отправки местоположения необходимо разрешить доступ к геолокации",
+        );
+        return;
+      }
+
+      setSending(true);
+
+      // Получаем текущую позицию
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const { latitude, longitude } = location.coords;
+
+      // Пытаемся получить адрес
+      let locationName = "Местоположение";
+      try {
+        const [address] = await Location.reverseGeocodeAsync({
+          latitude,
+          longitude,
+        });
+        if (address) {
+          const parts = [];
+          if (address.street) parts.push(address.street);
+          if (address.name && address.name !== address.street)
+            parts.push(address.name);
+          if (address.city) parts.push(address.city);
+          locationName = parts.join(", ") || "Местоположение";
+        }
+      } catch {
+        // Если не удалось получить адрес, используем дефолтное название
+      }
+
+      // Отправляем сообщение с геолокацией
+      const { error } = await supabase.from("messages").insert({
+        chat_id: id as string,
+        sender_id: user!.id,
+        content: locationName,
+        media_type: "location",
+        latitude,
+        longitude,
+        location_name: locationName,
+        reply_to_id: replyingTo?.id || null,
+      });
+
+      if (error) throw error;
+
+      setReplyingTo(null);
+      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error: any) {
+      console.error("Location error:", error);
+      const errorMsg = error?.message?.includes("column")
+        ? "Выполните SQL миграцию в Supabase"
+        : "Не удалось отправить местоположение";
+      Alert.alert("Ошибка", errorMsg);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Выбор и отправка документа
+  const handlePickDocument = async () => {
+    setShowAttachMenu(false);
+
+    if (Platform.OS === "web") {
+      Alert.alert("Недоступно", "Отправка файлов недоступна в веб-версии");
+      return;
+    }
+
+    // Предотвращаем множественные вызовы
+    if (isPickingDocumentRef.current) {
+      console.log("Document picker already in progress, skipping");
+      return;
+    }
+
+    console.log("Opening document picker...");
+    isPickingDocumentRef.current = true;
+
+    // Небольшая задержка чтобы дать expo-document-picker освободить предыдущий пикер
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    let pickerResult;
+    try {
+      pickerResult = await DocumentPicker.getDocumentAsync({
+        type: "*/*",
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+    } catch (pickerError: any) {
+      console.error("Document picker error:", pickerError);
+      isPickingDocumentRef.current = false;
+
+      // Если ошибка связана с уже активным пикером - пробуем ещё раз через секунду
+      if (pickerError?.message?.includes("Different document picking")) {
+        setTimeout(() => {
+          isPickingDocumentRef.current = false;
+        }, 1000);
+        return;
+      }
+
+      Alert.alert("Ошибка", "Не удалось открыть выбор документов");
+      return;
+    }
+
+    if (
+      pickerResult.canceled ||
+      !pickerResult.assets ||
+      !pickerResult.assets[0]
+    ) {
+      console.log("Document picker canceled");
+      isPickingDocumentRef.current = false;
+      return;
+    }
+
+    const file = pickerResult.assets[0];
+    console.log("File selected:", file.name);
+
+    // Проверка размера файла (макс 20MB)
+    const maxSize = 20 * 1024 * 1024;
+    if (file.size && file.size > maxSize) {
+      Alert.alert("Файл слишком большой", "Максимальный размер файла: 20 МБ");
+      isPickingDocumentRef.current = false;
+      return;
+    }
+
+    setSending(true);
+
+    try {
+      // Загружаем файл в Supabase Storage
+      // Безопасное извлечение расширения файла
+      const nameParts = file.name.split(".");
+      const rawExt = nameParts.length > 1 ? nameParts.pop() : "file";
+      // Очищаем расширение от небезопасных символов (только латиница и цифры)
+      const fileExt =
+        (rawExt || "file").replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "file";
+      const fileName = `${Date.now()}.${fileExt}`;
+      const filePath = `documents/${user!.id}/${fileName}`;
+
+      // Читаем файл как base64
+      const base64 = await FileSystem.readAsStringAsync(file.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const { error: uploadError } = await supabase.storage
+        .from("chat-media")
+        .upload(filePath, decode(base64), {
+          contentType: file.mimeType || "application/octet-stream",
+        });
+
+      if (uploadError) throw uploadError;
+
+      // Получаем публичный URL
+      const { data: urlData } = supabase.storage
+        .from("chat-media")
+        .getPublicUrl(filePath);
+
+      // Отправляем сообщение с файлом
+      const { error } = await supabase.from("messages").insert({
+        chat_id: id as string,
+        sender_id: user!.id,
+        content: file.name,
+        media_url: urlData.publicUrl,
+        media_type: "file",
+        file_name: file.name,
+        file_size: file.size || 0,
+        reply_to_id: replyingTo?.id || null,
+      });
+
+      if (error) throw error;
+
+      setReplyingTo(null);
+      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error: any) {
+      console.error("Document upload error:", error);
+      const errorMsg = error?.message?.includes("column")
+        ? "Выполните SQL миграцию в Supabase"
+        : "Не удалось отправить документ";
+      Alert.alert("Ошибка", errorMsg);
+    } finally {
+      setSending(false);
+      isPickingDocumentRef.current = false;
+    }
+  };
+
   const playAudio = async (messageId: string, audioUrl: string) => {
     // На веб используем HTML5 Audio
     if (Platform.OS === "web") {
@@ -1682,11 +1903,57 @@ export default function ChatScreen() {
     }
   };
 
+  // Функция для рендеринга текста с кликабельными ссылками
+  const renderTextWithLinks = (text: string, isMyMessage: boolean) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/gi;
+    const parts = text.split(urlRegex);
+
+    if (parts.length === 1 && !urlRegex.test(text)) {
+      // Нет ссылок - возвращаем простой текст
+      return text;
+    }
+
+    return parts.map((part, index) => {
+      if (urlRegex.test(part)) {
+        // Сбрасываем lastIndex после test
+        urlRegex.lastIndex = 0;
+        return (
+          <Text
+            key={index}
+            style={[
+              styles.linkText,
+              { color: isMyMessage ? "#90CAF9" : colors.primary },
+            ]}
+            onPress={() => {
+              if (Platform.OS === "web") {
+                window.open(part, "_blank");
+              } else {
+                Linking.openURL(part);
+              }
+            }}
+          >
+            {part}
+          </Text>
+        );
+      }
+      // Сбрасываем lastIndex
+      urlRegex.lastIndex = 0;
+      return part;
+    });
+  };
+
   // Функция подсветки найденного текста
   const highlightSearchText = (text: string, isMyMessage: boolean) => {
     if (!searchQuery || searchQuery.trim().length < 2) {
       return (
-        <Text style={[styles.messageText, { color: colors.text }]}>{text}</Text>
+        <Text
+          style={[
+            styles.messageText,
+            { color: isMyMessage ? "#fff" : colors.text },
+          ]}
+        >
+          {renderTextWithLinks(text, isMyMessage)}
+        </Text>
       );
     }
 
@@ -1696,7 +1963,14 @@ export default function ChatScreen() {
 
     if (index === -1) {
       return (
-        <Text style={[styles.messageText, { color: colors.text }]}>{text}</Text>
+        <Text
+          style={[
+            styles.messageText,
+            { color: isMyMessage ? "#fff" : colors.text },
+          ]}
+        >
+          {renderTextWithLinks(text, isMyMessage)}
+        </Text>
       );
     }
 
@@ -1705,10 +1979,15 @@ export default function ChatScreen() {
     const after = text.substring(index + searchQuery.length);
 
     return (
-      <Text style={[styles.messageText, { color: colors.text }]}>
-        {before}
+      <Text
+        style={[
+          styles.messageText,
+          { color: isMyMessage ? "#fff" : colors.text },
+        ]}
+      >
+        {renderTextWithLinks(before, isMyMessage)}
         <Text style={styles.searchHighlight}>{match}</Text>
-        {after}
+        {renderTextWithLinks(after, isMyMessage)}
       </Text>
     );
   };
@@ -1743,6 +2022,39 @@ export default function ChatScreen() {
     return currentDate !== prevDate;
   };
 
+  // Форматирование размера файла
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return "0 Б";
+    const k = 1024;
+    const sizes = ["Б", "КБ", "МБ", "ГБ"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+  };
+
+  // Получение иконки файла по расширению
+  const getFileIcon = (fileName: string): keyof typeof Ionicons.glyphMap => {
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
+    const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
+      pdf: "document-text",
+      doc: "document-text",
+      docx: "document-text",
+      xls: "grid",
+      xlsx: "grid",
+      ppt: "easel",
+      pptx: "easel",
+      zip: "archive",
+      rar: "archive",
+      "7z": "archive",
+      txt: "document",
+      mp3: "musical-notes",
+      wav: "musical-notes",
+      jpg: "image",
+      jpeg: "image",
+      png: "image",
+      gif: "image",
+    };
+    return icons[ext] || "document-attach";
+  };
   const renderMessage = ({
     item,
     index,
@@ -1867,10 +2179,14 @@ export default function ChatScreen() {
                   >
                     {item.replied_message.content ||
                       (item.replied_message.media_type === "image"
-                        ? "📷 Фото"
+                        ? "Фото"
                         : item.replied_message.media_type === "video"
-                          ? "📹 Видео"
-                          : "🎵 Аудио")}
+                          ? "Видео"
+                          : item.replied_message.media_type === "location"
+                            ? "Геолокация"
+                            : item.replied_message.media_type === "file"
+                              ? "Документ"
+                              : "Аудио")}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -1984,6 +2300,133 @@ export default function ChatScreen() {
                   </Text>
                 </TouchableOpacity>
               )}
+
+              {/* Location message */}
+              {item.media_type === "location" &&
+                item.latitude &&
+                item.longitude && (
+                  <TouchableOpacity
+                    style={styles.locationContainer}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      // Используем Google Maps URL - работает везде включая Expo Go
+                      const url = `https://www.google.com/maps/search/?api=1&query=${item.latitude},${item.longitude}`;
+                      if (Platform.OS === "web") {
+                        window.open(url, "_blank");
+                      } else {
+                        Linking.openURL(url);
+                      }
+                    }}
+                  >
+                    <Image
+                      source={{
+                        uri: `https://static-maps.yandex.ru/1.x/?ll=${item.longitude},${item.latitude}&z=14&size=280,150&l=map&pt=${item.longitude},${item.latitude},pm2rdl`,
+                      }}
+                      style={styles.locationMap}
+                      resizeMode="cover"
+                    />
+                    <View style={styles.locationInfo}>
+                      <View style={styles.locationHeader}>
+                        <Ionicons
+                          name="location"
+                          size={18}
+                          color={colors.primary}
+                        />
+                        <Text
+                          style={[styles.locationTitle, { color: colors.text }]}
+                          numberOfLines={1}
+                        >
+                          {item.location_name || "Местоположение"}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          styles.locationCoords,
+                          { color: colors.textSecondary },
+                        ]}
+                      >
+                        {item.latitude.toFixed(6)}, {item.longitude.toFixed(6)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+
+              {/* File/Document message */}
+              {item.media_type === "file" && item.media_url && (
+                <TouchableOpacity
+                  style={[
+                    styles.fileContainer,
+                    {
+                      backgroundColor: isMyMessage
+                        ? "rgba(255,255,255,0.15)"
+                        : isDark
+                          ? "rgba(255,255,255,0.08)"
+                          : "rgba(0,0,0,0.05)",
+                    },
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setDocumentViewer({
+                      url: item.media_url!,
+                      name: item.file_name || "Документ",
+                    });
+                  }}
+                  onLongPress={() => {
+                    // Длительное нажатие - открыть в браузере / скачать
+                    if (Platform.OS === "web") {
+                      window.open(item.media_url!, "_blank");
+                    } else {
+                      Linking.openURL(item.media_url!);
+                    }
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.fileIcon,
+                      { backgroundColor: colors.primary },
+                    ]}
+                  >
+                    <Ionicons
+                      name={getFileIcon(item.file_name || "")}
+                      size={24}
+                      color="#fff"
+                    />
+                  </View>
+                  <View style={styles.fileInfo}>
+                    <Text
+                      style={[
+                        styles.fileName,
+                        {
+                          color: isMyMessage ? "#fff" : colors.text,
+                        },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {item.file_name || "Документ"}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.fileSize,
+                        {
+                          color: isMyMessage
+                            ? "rgba(255,255,255,0.7)"
+                            : colors.textSecondary,
+                        },
+                      ]}
+                    >
+                      {formatFileSize(item.file_size || 0)}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="download-outline"
+                    size={22}
+                    color={
+                      isMyMessage ? "rgba(255,255,255,0.8)" : colors.primary
+                    }
+                  />
+                </TouchableOpacity>
+              )}
+
               {/* Text content */}
               {item.content
                 ? highlightSearchText(item.content, isMyMessage)
@@ -2571,9 +3014,14 @@ export default function ChatScreen() {
         )}
       </View>
 
-      {/* Android Attach Menu */}
-      {showAttachMenu && Platform.OS === "android" && (
-        <View style={styles.attachMenu}>
+      {/* Attach Menu - Android and Web */}
+      {showAttachMenu && Platform.OS !== "ios" && (
+        <View
+          style={[
+            styles.attachMenu,
+            { backgroundColor: colors.card, borderTopColor: colors.border },
+          ]}
+        >
           <TouchableOpacity
             style={styles.attachMenuItem}
             onPress={handlePickMedia}
@@ -2581,9 +3029,11 @@ export default function ChatScreen() {
             <View
               style={[styles.attachMenuIcon, { backgroundColor: "#4CAF50" }]}
             >
-              <Ionicons name="image" size={22} color={colors.textLight} />
+              <Ionicons name="image" size={20} color="#fff" />
             </View>
-            <Text style={styles.attachMenuText}>Галерея</Text>
+            <Text style={[styles.attachMenuText, { color: colors.text }]}>
+              Галерея
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.attachMenuItem}
@@ -2592,9 +3042,11 @@ export default function ChatScreen() {
             <View
               style={[styles.attachMenuIcon, { backgroundColor: "#2196F3" }]}
             >
-              <Ionicons name="camera" size={22} color={colors.textLight} />
+              <Ionicons name="camera" size={20} color="#fff" />
             </View>
-            <Text style={styles.attachMenuText}>Камера</Text>
+            <Text style={[styles.attachMenuText, { color: colors.text }]}>
+              Камера
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.attachMenuItem}
@@ -2603,9 +3055,37 @@ export default function ChatScreen() {
             <View
               style={[styles.attachMenuIcon, { backgroundColor: "#FF9800" }]}
             >
-              <Ionicons name="mic" size={22} color={colors.textLight} />
+              <Ionicons name="mic" size={20} color="#fff" />
             </View>
-            <Text style={styles.attachMenuText}>Аудио</Text>
+            <Text style={[styles.attachMenuText, { color: colors.text }]}>
+              Аудио
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.attachMenuItem}
+            onPress={handleSendLocation}
+          >
+            <View
+              style={[styles.attachMenuIcon, { backgroundColor: "#E91E63" }]}
+            >
+              <Ionicons name="location" size={20} color="#fff" />
+            </View>
+            <Text style={[styles.attachMenuText, { color: colors.text }]}>
+              Локация
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.attachMenuItem}
+            onPress={handlePickDocument}
+          >
+            <View
+              style={[styles.attachMenuIcon, { backgroundColor: "#9C27B0" }]}
+            >
+              <Ionicons name="document-attach" size={20} color="#fff" />
+            </View>
+            <Text style={[styles.attachMenuText, { color: colors.text }]}>
+              Файл
+            </Text>
           </TouchableOpacity>
         </View>
       )}
@@ -2647,10 +3127,14 @@ export default function ChatScreen() {
             >
               {replyingTo.content ||
                 (replyingTo.media_type === "image"
-                  ? "📷 Фото"
+                  ? "Фото"
                   : replyingTo.media_type === "video"
-                    ? "📹 Видео"
-                    : "🎵 Аудио")}
+                    ? "Видео"
+                    : replyingTo.media_type === "location"
+                      ? "Геолокация"
+                      : replyingTo.media_type === "file"
+                        ? "Документ"
+                        : "Аудио")}
             </Text>
           </View>
           <TouchableOpacity onPress={cancelReply} style={styles.replyCancel}>
@@ -2774,7 +3258,7 @@ export default function ChatScreen() {
         )}
       </View>
 
-      {/* Media Picker Modal */}
+      {/* Media Picker Modal - WhatsApp Style */}
       <Modal
         visible={showMediaPicker}
         transparent
@@ -2786,6 +3270,7 @@ export default function ChatScreen() {
             style={[
               styles.mediaPickerContainer,
               {
+                backgroundColor: isDark ? "#1F2C34" : "#FFFFFF",
                 transform: [
                   {
                     translateY: mediaPickerAnimation.interpolate({
@@ -2798,28 +3283,41 @@ export default function ChatScreen() {
               },
             ]}
           >
-            <View style={styles.mediaPickerHandle} />
-            <Text style={styles.mediaPickerTitle}>Отправить</Text>
+            <View
+              style={[
+                styles.mediaPickerHandle,
+                { backgroundColor: isDark ? "#3B4A54" : "#D1D5DB" },
+              ]}
+            />
 
             <View style={styles.mediaPickerGrid}>
+              {/* Документ */}
               <TouchableOpacity
                 style={styles.mediaPickerItem}
                 onPress={() => {
                   closeMediaPicker();
-                  setTimeout(handlePickMedia, 200);
+                  setTimeout(handlePickDocument, 200);
                 }}
               >
                 <View
                   style={[
-                    styles.mediaPickerIcon,
-                    { backgroundColor: "#7C4DFF" },
+                    styles.mediaPickerIconCircle,
+                    { backgroundColor: isDark ? "#2A3942" : "#F3F4F6" },
                   ]}
                 >
-                  <Ionicons name="image" size={28} color="#fff" />
+                  <Ionicons name="document-text" size={26} color="#7C4DFF" />
                 </View>
-                <Text style={styles.mediaPickerLabel}>Галерея</Text>
+                <Text
+                  style={[
+                    styles.mediaPickerLabel,
+                    { color: isDark ? "#8696A0" : "#667781" },
+                  ]}
+                >
+                  Документ
+                </Text>
               </TouchableOpacity>
 
+              {/* Камера */}
               <TouchableOpacity
                 style={styles.mediaPickerItem}
                 onPress={() => {
@@ -2829,63 +3327,129 @@ export default function ChatScreen() {
               >
                 <View
                   style={[
-                    styles.mediaPickerIcon,
-                    { backgroundColor: "#FF5722" },
+                    styles.mediaPickerIconCircle,
+                    { backgroundColor: isDark ? "#2A3942" : "#F3F4F6" },
                   ]}
                 >
-                  <Ionicons name="camera" size={28} color="#fff" />
+                  <Ionicons name="camera" size={26} color="#FF5252" />
                 </View>
-                <Text style={styles.mediaPickerLabel}>Камера</Text>
+                <Text
+                  style={[
+                    styles.mediaPickerLabel,
+                    { color: isDark ? "#8696A0" : "#667781" },
+                  ]}
+                >
+                  Камера
+                </Text>
               </TouchableOpacity>
 
+              {/* Галерея */}
               <TouchableOpacity
                 style={styles.mediaPickerItem}
                 onPress={() => {
                   closeMediaPicker();
-                  // Для аудио используем hold на кнопке микрофона
+                  setTimeout(handlePickMedia, 200);
+                }}
+              >
+                <View
+                  style={[
+                    styles.mediaPickerIconCircle,
+                    { backgroundColor: isDark ? "#2A3942" : "#F3F4F6" },
+                  ]}
+                >
+                  <Ionicons name="image" size={26} color="#FF9500" />
+                </View>
+                <Text
+                  style={[
+                    styles.mediaPickerLabel,
+                    { color: isDark ? "#8696A0" : "#667781" },
+                  ]}
+                >
+                  Галерея
+                </Text>
+              </TouchableOpacity>
+
+              {/* Аудио */}
+              <TouchableOpacity
+                style={styles.mediaPickerItem}
+                onPress={() => {
+                  closeMediaPicker();
+                  setTimeout(handleRecordAudio, 200);
+                }}
+              >
+                <View
+                  style={[
+                    styles.mediaPickerIconCircle,
+                    { backgroundColor: isDark ? "#2A3942" : "#F3F4F6" },
+                  ]}
+                >
+                  <Ionicons name="headset" size={26} color="#FF9800" />
+                </View>
+                <Text
+                  style={[
+                    styles.mediaPickerLabel,
+                    { color: isDark ? "#8696A0" : "#667781" },
+                  ]}
+                >
+                  Аудио
+                </Text>
+              </TouchableOpacity>
+
+              {/* Местоположение */}
+              <TouchableOpacity
+                style={styles.mediaPickerItem}
+                onPress={() => {
+                  closeMediaPicker();
+                  setTimeout(handleSendLocation, 200);
+                }}
+              >
+                <View
+                  style={[
+                    styles.mediaPickerIconCircle,
+                    { backgroundColor: isDark ? "#2A3942" : "#F3F4F6" },
+                  ]}
+                >
+                  <Ionicons name="location" size={26} color="#53BDEB" />
+                </View>
+                <Text
+                  style={[
+                    styles.mediaPickerLabel,
+                    { color: isDark ? "#8696A0" : "#667781" },
+                  ]}
+                >
+                  Локация
+                </Text>
+              </TouchableOpacity>
+
+              {/* Контакт (placeholder) */}
+              <TouchableOpacity
+                style={styles.mediaPickerItem}
+                onPress={() => {
+                  closeMediaPicker();
                   Alert.alert(
-                    "Аудио",
-                    "Удерживайте кнопку микрофона для записи голосового сообщения",
+                    "Скоро",
+                    "Отправка контактов скоро будет доступна",
                   );
                 }}
               >
                 <View
                   style={[
-                    styles.mediaPickerIcon,
-                    { backgroundColor: "#FF9800" },
+                    styles.mediaPickerIconCircle,
+                    { backgroundColor: isDark ? "#2A3942" : "#F3F4F6" },
                   ]}
                 >
-                  <Ionicons name="mic" size={28} color="#fff" />
+                  <Ionicons name="person" size={26} color="#0088CC" />
                 </View>
-                <Text style={styles.mediaPickerLabel}>Аудио</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.mediaPickerItem}
-                onPress={() => {
-                  closeMediaPicker();
-                  // Можно добавить выбор документов позже
-                  Alert.alert("Скоро", "Отправка документов будет добавлена");
-                }}
-              >
-                <View
+                <Text
                   style={[
-                    styles.mediaPickerIcon,
-                    { backgroundColor: "#2196F3" },
+                    styles.mediaPickerLabel,
+                    { color: isDark ? "#8696A0" : "#667781" },
                   ]}
                 >
-                  <Ionicons name="document" size={28} color="#fff" />
-                </View>
-                <Text style={styles.mediaPickerLabel}>Документ</Text>
+                  Контакт
+                </Text>
               </TouchableOpacity>
             </View>
-
-            <TouchableOpacity
-              style={styles.mediaPickerCancel}
-              onPress={closeMediaPicker}
-            >
-              <Text style={styles.mediaPickerCancelText}>Отмена</Text>
-            </TouchableOpacity>
           </Animated.View>
         </Pressable>
       </Modal>
@@ -3267,6 +3831,138 @@ export default function ChatScreen() {
         </View>
       </Modal>
 
+      {/* Document Viewer Modal */}
+      <Modal
+        visible={!!documentViewer}
+        animationType="slide"
+        onRequestClose={() => setDocumentViewer(null)}
+      >
+        <View
+          style={[
+            styles.documentViewerContainer,
+            { backgroundColor: isDark ? "#111B21" : "#fff" },
+          ]}
+        >
+          {/* Header */}
+          <View
+            style={[
+              styles.documentViewerHeader,
+              { backgroundColor: isDark ? "#1F2C34" : colors.primary },
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.documentViewerBackButton}
+              onPress={() => setDocumentViewer(null)}
+            >
+              <Ionicons name="arrow-back" size={24} color="#fff" />
+            </TouchableOpacity>
+            <View style={styles.documentViewerTitleContainer}>
+              <Text style={styles.documentViewerTitle} numberOfLines={1}>
+                {documentViewer?.name}
+              </Text>
+            </View>
+            <View style={styles.documentViewerActions}>
+              <TouchableOpacity
+                style={styles.documentViewerActionButton}
+                onPress={async () => {
+                  if (!documentViewer) return;
+                  if (Platform.OS === "web") {
+                    window.open(documentViewer.url, "_blank");
+                  } else {
+                    try {
+                      // Скачать и поделиться файлом
+                      const fileUri =
+                        FileSystem.cacheDirectory + documentViewer.name;
+                      const downloadResult = await FileSystem.downloadAsync(
+                        documentViewer.url,
+                        fileUri,
+                      );
+                      if (await Sharing.isAvailableAsync()) {
+                        await Sharing.shareAsync(downloadResult.uri);
+                      } else {
+                        Linking.openURL(documentViewer.url);
+                      }
+                    } catch (e) {
+                      Linking.openURL(documentViewer.url);
+                    }
+                  }
+                }}
+              >
+                <Ionicons name="share-outline" size={22} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.documentViewerActionButton}
+                onPress={() => {
+                  if (documentViewer) {
+                    if (Platform.OS === "web") {
+                      window.open(documentViewer.url, "_blank");
+                    } else {
+                      Linking.openURL(documentViewer.url);
+                    }
+                  }
+                }}
+              >
+                <Ionicons name="open-outline" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Document Content */}
+          {documentLoading && (
+            <View style={styles.documentViewerLoading}>
+              <ActivityIndicator size="large" color={colors.primary} />
+              <Text
+                style={[
+                  styles.documentViewerLoadingText,
+                  { color: colors.textSecondary },
+                ]}
+              >
+                Загрузка документа...
+              </Text>
+            </View>
+          )}
+
+          {documentViewer && Platform.OS !== "web" && (
+            <WebView
+              source={{
+                uri: `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(documentViewer.url)}`,
+              }}
+              style={styles.documentViewerWebView}
+              onLoadStart={() => setDocumentLoading(true)}
+              onLoadEnd={() => setDocumentLoading(false)}
+              onError={() => {
+                setDocumentLoading(false);
+                Alert.alert(
+                  "Ошибка",
+                  "Не удалось загрузить документ. Открыть в браузере?",
+                  [
+                    { text: "Отмена", style: "cancel" },
+                    {
+                      text: "Открыть",
+                      onPress: () => {
+                        Linking.openURL(documentViewer.url);
+                        setDocumentViewer(null);
+                      },
+                    },
+                  ],
+                );
+              }}
+              startInLoadingState
+              javaScriptEnabled
+              domStorageEnabled
+            />
+          )}
+
+          {documentViewer && Platform.OS === "web" && (
+            <iframe
+              src={`https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(documentViewer.url)}`}
+              style={{ flex: 1, border: "none", width: "100%", height: "100%" }}
+              onLoad={() => setDocumentLoading(false)}
+            />
+          )}
+        </View>
+      </Modal>
+
       {/* Avatar Viewer Modal */}
       <Modal
         visible={showAvatarViewer}
@@ -3499,6 +4195,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
   },
+  linkText: {
+    textDecorationLine: "underline",
+  },
   myMessageText: {},
   otherMessageText: {},
   messageTime: {
@@ -3644,27 +4343,85 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     fontSize: 14,
   },
+  // Location message styles
+  locationContainer: {
+    width: 280,
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 4,
+  },
+  locationMap: {
+    width: "100%",
+    height: 150,
+  },
+  locationInfo: {
+    padding: 10,
+  },
+  locationHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  locationTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    flex: 1,
+  },
+  locationCoords: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  // File/Document message styles
+  fileContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 12,
+    gap: 12,
+    marginBottom: 4,
+  },
+  fileIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  fileInfo: {
+    flex: 1,
+  },
+  fileName: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  fileSize: {
+    fontSize: 12,
+    marginTop: 2,
+  },
   // Attach menu styles
   attachMenu: {
     flexDirection: "row",
-    justifyContent: "space-around",
-    paddingVertical: 16,
-    paddingHorizontal: 20,
+    justifyContent: "space-evenly",
+    alignItems: "flex-start",
+    paddingVertical: 12,
+    paddingHorizontal: 8,
     borderTopWidth: 1,
   },
   attachMenuItem: {
     alignItems: "center",
+    width: 56,
   },
   attachMenuIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 6,
+    marginBottom: 4,
   },
   attachMenuText: {
-    fontSize: 12,
+    fontSize: 10,
+    textAlign: "center",
   },
   // Recording styles
   recordingIndicator: {
@@ -3883,17 +4640,18 @@ const styles = StyleSheet.create({
   },
   mediaPickerOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
     justifyContent: "flex-end",
   },
   mediaPickerContainer: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingBottom: 40,
-    paddingTop: 12,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 32,
+    paddingTop: 8,
+    paddingHorizontal: 16,
   },
   mediaPickerHandle: {
-    width: 40,
+    width: 36,
     height: 4,
     borderRadius: 2,
     alignSelf: "center",
@@ -3908,24 +4666,34 @@ const styles = StyleSheet.create({
   mediaPickerGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    justifyContent: "space-around",
-    paddingHorizontal: 20,
+    justifyContent: "flex-start",
+    paddingHorizontal: 8,
   },
   mediaPickerItem: {
-    width: "25%",
+    width: "33.33%",
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: 24,
   },
-  mediaPickerIcon: {
+  mediaPickerIconCircle: {
     width: 56,
     height: 56,
-    borderRadius: 16,
+    borderRadius: 28,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 8,
   },
+  mediaPickerIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 6,
+  },
   mediaPickerLabel: {
     fontSize: 12,
+    textAlign: "center",
+    fontWeight: "500",
   },
   mediaPickerCancel: {
     marginHorizontal: 20,
@@ -3978,6 +4746,59 @@ const styles = StyleSheet.create({
   fullscreenVideo: {
     width: Dimensions.get("window").width,
     height: Dimensions.get("window").height * 0.7,
+  },
+  // Document Viewer
+  documentViewerContainer: {
+    flex: 1,
+  },
+  documentViewerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: Platform.OS === "ios" ? 50 : 10,
+    paddingBottom: 10,
+    paddingHorizontal: 8,
+  },
+  documentViewerBackButton: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  documentViewerTitleContainer: {
+    flex: 1,
+    marginHorizontal: 8,
+  },
+  documentViewerTitle: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#fff",
+  },
+  documentViewerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  documentViewerActionButton: {
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  documentViewerWebView: {
+    flex: 1,
+  },
+  documentViewerLoading: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 5,
+  },
+  documentViewerLoadingText: {
+    marginTop: 12,
+    fontSize: 14,
   },
   // Avatar Viewer
   avatarViewerOverlay: {

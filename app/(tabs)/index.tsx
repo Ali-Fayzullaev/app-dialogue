@@ -3,6 +3,7 @@ import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import { useNetworkStatus } from "@/hooks/use-network-status";
+import { isUserReallyOnline } from "@/hooks/use-presence";
 import { CachedChat, cacheService } from "@/lib/cache-service";
 import { supabase } from "@/lib/supabase";
 import { Chat, Message, Profile } from "@/types/database";
@@ -194,11 +195,14 @@ export default function ChatsScreen() {
           if (otherMemberId) {
             const { data: presence } = await supabase
               .from("user_presence")
-              .select("is_online")
+              .select("is_online, last_seen")
               .eq("user_id", otherMemberId)
               .single();
 
-            otherUserOnline = presence?.is_online || false;
+            otherUserOnline = isUserReallyOnline(
+              presence?.is_online || false,
+              presence?.last_seen || null,
+            );
           }
 
           return {
@@ -415,10 +419,16 @@ export default function ChatsScreen() {
                 : ""}
               {item.last_message?.media_type
                 ? item.last_message.media_type === "image"
-                  ? "📷 Фото"
+                  ? "Фото"
                   : item.last_message.media_type === "video"
-                    ? "🎬 Видео"
-                    : "🎵 Аудио"
+                    ? "Видео"
+                    : item.last_message.media_type === "audio"
+                      ? "Аудио"
+                      : item.last_message.media_type === "location"
+                        ? "Геолокация"
+                        : item.last_message.media_type === "file"
+                          ? "Документ"
+                          : item.last_message?.content || "Нет сообщений"
                 : item.last_message?.content || "Нет сообщений"}
             </Text>
             {item.unread_count > 0 && (

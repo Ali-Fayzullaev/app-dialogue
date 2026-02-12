@@ -15,6 +15,7 @@ import {
     Dimensions,
     FlatList,
     Image,
+    Linking,
     Modal,
     Platform,
     Pressable,
@@ -44,7 +45,24 @@ interface MediaItem {
   duration?: number;
 }
 
-type MediaTab = "media" | "audio";
+interface FileItem {
+  id: string;
+  url: string;
+  name: string;
+  size: number;
+  created_at: string;
+  sender_id: string;
+}
+
+interface LinkItem {
+  id: string;
+  url: string;
+  title: string;
+  created_at: string;
+  sender_id: string;
+}
+
+type MediaTab = "media" | "audio" | "files" | "links";
 
 export default function UserProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -56,6 +74,8 @@ export default function UserProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [audioItems, setAudioItems] = useState<MediaItem[]>([]);
+  const [fileItems, setFileItems] = useState<FileItem[]>([]);
+  const [linkItems, setLinkItems] = useState<LinkItem[]>([]);
   const [activeTab, setActiveTab] = useState<MediaTab>("media");
   const [fullscreenMedia, setFullscreenMedia] = useState<MediaItem | null>(
     null,
@@ -65,6 +85,8 @@ export default function UserProfileScreen() {
     images: 0,
     videos: 0,
     audio: 0,
+    files: 0,
+    links: 0,
   });
 
   // Audio player state
@@ -129,52 +151,110 @@ export default function UserProfileScreen() {
 
       const myIds = myChats.map((c) => c.chat_id);
       const theirIds = theirChats.map((c) => c.chat_id);
-      const commonChatIds = myIds.filter((id) => theirIds.includes(id));
+      const commonChatIds = myIds.filter((chatId) => theirIds.includes(chatId));
 
       if (commonChatIds.length === 0) return;
 
-      // Получить все медиа сообщения из общих чатов
+      // Получить все сообщения с медиа из общих чатов
       const { data: messages } = await supabase
         .from("messages")
-        .select("id, media_url, media_type, created_at, sender_id")
+        .select(
+          "id, content, media_url, media_type, file_name, file_size, created_at, sender_id",
+        )
         .in("chat_id", commonChatIds)
-        .not("media_url", "is", null)
         .order("created_at", { ascending: false });
 
       if (!messages) return;
 
       const media: MediaItem[] = [];
       const audio: MediaItem[] = [];
+      const files: FileItem[] = [];
+      const links: LinkItem[] = [];
       let imgCount = 0,
         vidCount = 0,
-        audCount = 0;
+        audCount = 0,
+        fileCount = 0,
+        linkCount = 0;
 
       messages.forEach((msg) => {
-        if (!msg.media_url || !msg.media_type) return;
+        // Обработка медиа
+        if (msg.media_url && msg.media_type) {
+          if (msg.media_type === "image") {
+            media.push({
+              id: msg.id,
+              url: msg.media_url,
+              type: "image",
+              created_at: msg.created_at,
+              sender_id: msg.sender_id,
+            });
+            imgCount++;
+          } else if (msg.media_type === "video") {
+            media.push({
+              id: msg.id,
+              url: msg.media_url,
+              type: "video",
+              created_at: msg.created_at,
+              sender_id: msg.sender_id,
+            });
+            vidCount++;
+          } else if (msg.media_type === "audio") {
+            audio.push({
+              id: msg.id,
+              url: msg.media_url,
+              type: "audio",
+              created_at: msg.created_at,
+              sender_id: msg.sender_id,
+            });
+            audCount++;
+          } else if (msg.media_type === "file") {
+            files.push({
+              id: msg.id,
+              url: msg.media_url,
+              name: msg.file_name || "Документ",
+              size: msg.file_size || 0,
+              created_at: msg.created_at,
+              sender_id: msg.sender_id,
+            });
+            fileCount++;
+          }
+        }
 
-        const item: MediaItem = {
-          id: msg.id,
-          url: msg.media_url,
-          type: msg.media_type as "image" | "video" | "audio",
-          created_at: msg.created_at,
-          sender_id: msg.sender_id,
-        };
-
-        if (msg.media_type === "image") {
-          media.push(item);
-          imgCount++;
-        } else if (msg.media_type === "video") {
-          media.push(item);
-          vidCount++;
-        } else if (msg.media_type === "audio") {
-          audio.push(item);
-          audCount++;
+        // Извлечение ссылок из текста
+        if (msg.content) {
+          // Создаём новый regex для каждого сообщения
+          const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`[\]]+)/g;
+          const foundUrls = msg.content.match(urlRegex);
+          if (foundUrls) {
+            foundUrls.forEach((url: string) => {
+              // Убираем возможные знаки препинания в конце
+              const cleanUrl = url.replace(/[.,;:!?)]+$/, "");
+              // Проверяем что это не ссылка на медиа в Supabase storage
+              if (!cleanUrl.includes("supabase.co/storage")) {
+                links.push({
+                  id: `${msg.id}-${linkCount}`,
+                  url: cleanUrl,
+                  title: extractDomain(cleanUrl),
+                  created_at: msg.created_at,
+                  sender_id: msg.sender_id,
+                });
+                linkCount++;
+              }
+            });
+          }
         }
       });
 
       setMediaItems(media);
       setAudioItems(audio);
-      setMediaCount({ images: imgCount, videos: vidCount, audio: audCount });
+      setFileItems(files);
+      setLinkItems(links);
+      setMediaCount({
+        images: imgCount,
+        videos: vidCount,
+        audio: audCount,
+        files: fileCount,
+        links: linkCount,
+      });
     } catch (error) {
       console.error("Error fetching shared media:", error);
     }
@@ -193,6 +273,32 @@ export default function UserProfileScreen() {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const extractDomain = (url: string) => {
+    try {
+      const domain = new URL(url).hostname.replace("www.", "");
+      return domain;
+    } catch {
+      return url.substring(0, 30);
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const getFileIcon = (fileName: string) => {
+    const ext = fileName.split(".").pop()?.toLowerCase() || "";
+    if (["pdf"].includes(ext)) return "document-text";
+    if (["doc", "docx"].includes(ext)) return "document";
+    if (["xls", "xlsx"].includes(ext)) return "grid";
+    if (["ppt", "pptx"].includes(ext)) return "easel";
+    if (["zip", "rar", "7z"].includes(ext)) return "archive";
+    if (["txt", "rtf"].includes(ext)) return "document-text-outline";
+    return "document-attach";
   };
 
   // Audio playback
@@ -505,6 +611,100 @@ export default function UserProfileScreen() {
     );
   };
 
+  const renderFileItem = ({ item }: { item: FileItem }) => {
+    const isOwn = item.sender_id === user?.id;
+
+    return (
+      <TouchableOpacity
+        style={[styles.fileItem, { backgroundColor: colors.card }]}
+        onPress={() => Linking.openURL(item.url)}
+        activeOpacity={0.7}
+      >
+        <View
+          style={[
+            styles.fileIconContainer,
+            { backgroundColor: colors.primaryLight },
+          ]}
+        >
+          <Ionicons
+            name={getFileIcon(item.name)}
+            size={24}
+            color={colors.primary}
+          />
+        </View>
+        <View style={styles.fileContent}>
+          <Text
+            style={[styles.fileItemName, { color: colors.text }]}
+            numberOfLines={1}
+          >
+            {item.name}
+          </Text>
+          <View style={styles.fileMeta}>
+            <Text style={[styles.fileItemSize, { color: colors.textMuted }]}>
+              {formatFileSize(item.size)}
+            </Text>
+            <Text style={[styles.fileItemDate, { color: colors.textMuted }]}>
+              {formatDate(item.created_at)}
+            </Text>
+            {isOwn && (
+              <View style={styles.ownLabel}>
+                <Text style={[styles.ownLabelText, { color: colors.primary }]}>
+                  Вы
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+        <Ionicons name="download-outline" size={20} color={colors.textMuted} />
+      </TouchableOpacity>
+    );
+  };
+
+  const renderLinkItem = ({ item }: { item: LinkItem }) => {
+    const isOwn = item.sender_id === user?.id;
+
+    return (
+      <TouchableOpacity
+        style={[styles.linkItem, { backgroundColor: colors.card }]}
+        onPress={() => Linking.openURL(item.url)}
+        activeOpacity={0.7}
+      >
+        <View
+          style={[styles.linkIconContainer, { backgroundColor: "#E8F5E9" }]}
+        >
+          <Ionicons name="link" size={22} color="#4CAF50" />
+        </View>
+        <View style={styles.linkContent}>
+          <Text
+            style={[styles.linkTitle, { color: colors.primary }]}
+            numberOfLines={1}
+          >
+            {item.title}
+          </Text>
+          <Text
+            style={[styles.linkUrl, { color: colors.textMuted }]}
+            numberOfLines={1}
+          >
+            {item.url}
+          </Text>
+          <View style={styles.linkMeta}>
+            <Text style={[styles.linkDate, { color: colors.textMuted }]}>
+              {formatDate(item.created_at)}
+            </Text>
+            {isOwn && (
+              <View style={styles.ownLabel}>
+                <Text style={[styles.ownLabelText, { color: colors.primary }]}>
+                  Вы
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+        <Ionicons name="open-outline" size={18} color={colors.textMuted} />
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
@@ -568,7 +768,7 @@ export default function UserProfileScreen() {
         <View style={[styles.statsContainer, { backgroundColor: colors.card }]}>
           <View style={styles.statItem}>
             <View style={[styles.statIcon, { backgroundColor: "#E3F2FD" }]}>
-              <Ionicons name="image" size={20} color="#2196F3" />
+              <Ionicons name="image" size={18} color="#2196F3" />
             </View>
             <Text style={[styles.statValue, { color: colors.text }]}>
               {mediaCount.images}
@@ -580,7 +780,7 @@ export default function UserProfileScreen() {
 
           <View style={styles.statItem}>
             <View style={[styles.statIcon, { backgroundColor: "#FCE4EC" }]}>
-              <Ionicons name="videocam" size={20} color="#E91E63" />
+              <Ionicons name="videocam" size={18} color="#E91E63" />
             </View>
             <Text style={[styles.statValue, { color: colors.text }]}>
               {mediaCount.videos}
@@ -592,7 +792,7 @@ export default function UserProfileScreen() {
 
           <View style={styles.statItem}>
             <View style={[styles.statIcon, { backgroundColor: "#FFF3E0" }]}>
-              <Ionicons name="mic" size={20} color="#FF9800" />
+              <Ionicons name="mic" size={18} color="#FF9800" />
             </View>
             <Text style={[styles.statValue, { color: colors.text }]}>
               {mediaCount.audio}
@@ -601,11 +801,38 @@ export default function UserProfileScreen() {
               Аудио
             </Text>
           </View>
+
+          <View style={styles.statItem}>
+            <View style={[styles.statIcon, { backgroundColor: "#E8EAF6" }]}>
+              <Ionicons name="document" size={18} color="#5C6BC0" />
+            </View>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {mediaCount.files}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.textMuted }]}>
+              Файлы
+            </Text>
+          </View>
+
+          <View style={styles.statItem}>
+            <View style={[styles.statIcon, { backgroundColor: "#E8F5E9" }]}>
+              <Ionicons name="link" size={18} color="#4CAF50" />
+            </View>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {mediaCount.links}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.textMuted }]}>
+              Ссылки
+            </Text>
+          </View>
         </View>
 
         {/* Tabs */}
-        <View
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
           style={[styles.tabsContainer, { borderBottomColor: colors.border }]}
+          contentContainerStyle={styles.tabsContent}
         >
           <TouchableOpacity
             style={[
@@ -619,7 +846,7 @@ export default function UserProfileScreen() {
           >
             <Ionicons
               name="images"
-              size={22}
+              size={20}
               color={activeTab === "media" ? colors.primary : colors.textMuted}
             />
             <Text
@@ -645,7 +872,7 @@ export default function UserProfileScreen() {
           >
             <Ionicons
               name="musical-notes"
-              size={22}
+              size={20}
               color={activeTab === "audio" ? colors.primary : colors.textMuted}
             />
             <Text
@@ -658,11 +885,63 @@ export default function UserProfileScreen() {
               Аудио
             </Text>
           </TouchableOpacity>
-        </View>
 
-        {/* Media Grid / Audio List */}
-        {activeTab === "media" ? (
-          mediaItems.length > 0 ? (
+          <TouchableOpacity
+            style={[
+              styles.tab,
+              activeTab === "files" && [
+                styles.activeTab,
+                { borderBottomColor: colors.primary },
+              ],
+            ]}
+            onPress={() => setActiveTab("files")}
+          >
+            <Ionicons
+              name="document"
+              size={20}
+              color={activeTab === "files" ? colors.primary : colors.textMuted}
+            />
+            <Text
+              style={[
+                styles.tabText,
+                { color: colors.textMuted },
+                activeTab === "files" && { color: colors.primary },
+              ]}
+            >
+              Файлы
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.tab,
+              activeTab === "links" && [
+                styles.activeTab,
+                { borderBottomColor: colors.primary },
+              ],
+            ]}
+            onPress={() => setActiveTab("links")}
+          >
+            <Ionicons
+              name="link"
+              size={20}
+              color={activeTab === "links" ? colors.primary : colors.textMuted}
+            />
+            <Text
+              style={[
+                styles.tabText,
+                { color: colors.textMuted },
+                activeTab === "links" && { color: colors.primary },
+              ]}
+            >
+              Ссылки
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+
+        {/* Content based on active tab */}
+        {activeTab === "media" &&
+          (mediaItems.length > 0 ? (
             <FlatList
               key="media-grid"
               data={mediaItems}
@@ -684,28 +963,76 @@ export default function UserProfileScreen() {
                 Нет общих фото и видео
               </Text>
             </View>
-          )
-        ) : audioItems.length > 0 ? (
-          <FlatList
-            key="audio-list"
-            data={audioItems}
-            renderItem={renderAudioItem}
-            keyExtractor={(item) => item.id}
-            scrollEnabled={false}
-            style={styles.audioList}
-          />
-        ) : (
-          <View style={styles.emptyState}>
-            <Ionicons
-              name="musical-notes-outline"
-              size={48}
-              color={colors.textMuted}
+          ))}
+
+        {activeTab === "audio" &&
+          (audioItems.length > 0 ? (
+            <FlatList
+              key="audio-list"
+              data={audioItems}
+              renderItem={renderAudioItem}
+              keyExtractor={(item) => item.id}
+              scrollEnabled={false}
+              style={styles.audioList}
             />
-            <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-              Нет голосовых сообщений
-            </Text>
-          </View>
-        )}
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons
+                name="musical-notes-outline"
+                size={48}
+                color={colors.textMuted}
+              />
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+                Нет голосовых сообщений
+              </Text>
+            </View>
+          ))}
+
+        {activeTab === "files" &&
+          (fileItems.length > 0 ? (
+            <FlatList
+              key="files-list"
+              data={fileItems}
+              renderItem={renderFileItem}
+              keyExtractor={(item) => item.id}
+              scrollEnabled={false}
+              style={styles.filesList}
+            />
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons
+                name="document-outline"
+                size={48}
+                color={colors.textMuted}
+              />
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+                Нет общих файлов
+              </Text>
+            </View>
+          ))}
+
+        {activeTab === "links" &&
+          (linkItems.length > 0 ? (
+            <FlatList
+              key="links-list"
+              data={linkItems}
+              renderItem={renderLinkItem}
+              keyExtractor={(item) => item.id}
+              scrollEnabled={false}
+              style={styles.linksList}
+            />
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons
+                name="link-outline"
+                size={48}
+                color={colors.textMuted}
+              />
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+                Нет общих ссылок
+              </Text>
+            </View>
+          ))}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -1050,44 +1377,44 @@ const styles = StyleSheet.create({
   },
   statsContainer: {
     flexDirection: "row",
-    justifyContent: "space-around",
-    paddingVertical: 20,
-    paddingHorizontal: 16,
+    justifyContent: "space-between",
+    paddingVertical: 16,
+    paddingHorizontal: 12,
     marginHorizontal: 16,
     borderRadius: 16,
     marginBottom: 20,
   },
   statItem: {
     alignItems: "center",
+    flex: 1,
   },
   statIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 6,
   },
   statValue: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "bold",
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: 10,
     marginTop: 2,
   },
   tabsContainer: {
-    flexDirection: "row",
     borderBottomWidth: 1,
     marginHorizontal: 16,
   },
   tab: {
-    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 14,
-    gap: 8,
+    paddingHorizontal: 16,
+    gap: 6,
   },
   activeTab: {
     borderBottomWidth: 2,
@@ -1156,6 +1483,89 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 15,
     marginTop: 12,
+  },
+  // Files list styles
+  filesList: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  fileItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  fileIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  fileContent: {
+    flex: 1,
+    marginRight: 8,
+  },
+  fileItemName: {
+    fontSize: 15,
+    fontWeight: "500",
+    marginBottom: 4,
+  },
+  fileMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  fileItemSize: {
+    fontSize: 12,
+    marginRight: 8,
+  },
+  fileItemDate: {
+    fontSize: 12,
+  },
+  // Links list styles
+  linksList: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  linkItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  linkIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  linkContent: {
+    flex: 1,
+    marginRight: 8,
+  },
+  linkTitle: {
+    fontSize: 15,
+    fontWeight: "500",
+    marginBottom: 2,
+  },
+  linkUrl: {
+    fontSize: 13,
+    marginBottom: 4,
+  },
+  linkMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  linkDate: {
+    fontSize: 12,
+  },
+  tabsContent: {
+    paddingHorizontal: 8,
   },
   fullscreenOverlay: {
     flex: 1,

@@ -91,11 +91,18 @@ export interface Database {
           sender_id: string;
           content: string;
           media_url: string | null;
-          media_type: "image" | "video" | "audio" | null;
+          media_type: "image" | "video" | "audio" | "location" | "file" | null;
           created_at: string;
           updated_at: string | null;
           is_read: boolean;
           reply_to_id: string | null;
+          // Location fields
+          latitude: number | null;
+          longitude: number | null;
+          location_name: string | null;
+          // File fields
+          file_name: string | null;
+          file_size: number | null;
         };
         Insert: {
           id?: string;
@@ -103,11 +110,16 @@ export interface Database {
           sender_id: string;
           content: string;
           media_url?: string | null;
-          media_type?: "image" | "video" | "audio" | null;
+          media_type?: "image" | "video" | "audio" | "location" | "file" | null;
           created_at?: string;
           updated_at?: string | null;
           is_read?: boolean;
           reply_to_id?: string | null;
+          latitude?: number | null;
+          longitude?: number | null;
+          location_name?: string | null;
+          file_name?: string | null;
+          file_size?: number | null;
         };
         Update: {
           id?: string;
@@ -115,11 +127,16 @@ export interface Database {
           sender_id?: string;
           content?: string;
           media_url?: string | null;
-          media_type?: "image" | "video" | "audio" | null;
+          media_type?: "image" | "video" | "audio" | "location" | "file" | null;
           updated_at?: string | null;
           created_at?: string;
           is_read?: boolean;
           reply_to_id?: string | null;
+          latitude?: number | null;
+          longitude?: number | null;
+          location_name?: string | null;
+          file_name?: string | null;
+          file_size?: number | null;
         };
         Relationships: [];
       };

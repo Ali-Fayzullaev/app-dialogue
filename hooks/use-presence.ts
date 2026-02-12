@@ -31,10 +31,13 @@ export function usePresence(userId: string | null) {
       );
 
       if (error) {
-        console.error("Error updating presence:", error);
+        // Ignore RLS/permission errors silently in production
+        if (process.env.NODE_ENV === "development") {
+          console.warn("Presence update warning:", error.message);
+        }
       }
     } catch (error) {
-      console.error("Presence update error:", error);
+      // Silently ignore presence errors to not spam console
     }
   };
 
@@ -153,7 +156,7 @@ export function usePresence(userId: string | null) {
 }
 
 // Проверка, онлайн ли пользователь по last_seen
-const isUserReallyOnline = (
+export const isUserReallyOnline = (
   isOnlineFlag: boolean,
   lastSeen: string | null,
 ): boolean => {

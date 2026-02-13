@@ -105,6 +105,7 @@ export default function ChatScreen() {
   const router = useRouter();
   const channelRef = useRef<RealtimeChannel | null>(null);
   const blockChannelRef = useRef<RealtimeChannel | null>(null);
+  const activityChannelRef = useRef<RealtimeChannel | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const waveformDataRef = useRef<number[]>([]);
@@ -137,7 +138,12 @@ export default function ChatScreen() {
   } | null>(null);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [typingUsers, setTypingUsers] = useState<
-    { id: string; username: string; avatar_url: string | null }[]
+    {
+      id: string;
+      username: string;
+      avatar_url: string | null;
+      action: string;
+    }[]
   >([]);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingSentRef = useRef<number>(0);
@@ -252,6 +258,9 @@ export default function ChatScreen() {
     fetchPinnedMessages();
     subscribeToMessages();
     checkBlockStatus();
+    // Подписываемся на канал активности для sidebar
+    activityChannelRef.current = supabase.channel(`activity:${id}`).subscribe();
+
     subscribeToBlockStatus();
 
     return () => {
@@ -260,6 +269,21 @@ export default function ChatScreen() {
       }
       if (blockChannelRef.current) {
         supabase.removeChannel(blockChannelRef.current);
+      }
+      if (activityChannelRef.current) {
+        // Отправляем idle перед отключением
+        activityChannelRef.current.send({
+          type: "broadcast",
+          event: "activity",
+          payload: {
+            userId: user?.id,
+            username: "",
+            isTyping: false,
+            action: "idle",
+            chatId: id,
+          },
+        });
+        supabase.removeChannel(activityChannelRef.current);
       }
       if (soundRef.current) {
         soundRef.current.unloadAsync();
@@ -1184,8 +1208,14 @@ export default function ChatScreen() {
 
           setMessages((prev) => [...prev, messageWithSender]);
 
-          // Если сообщение от другого — помечаем как прочитанное
+          // Если сообщение от другого — помечаем как доставленное и прочитанное
           if (newMsg.sender_id !== user?.id) {
+            // Сначала помечаем как доставленное
+            supabase
+              .from("messages")
+              .update({ is_delivered: true })
+              .eq("id", newMsg.id)
+              .then(() => {});
             markMessagesAsRead();
           }
 
@@ -1212,15 +1242,31 @@ export default function ChatScreen() {
         },
       )
       .on("broadcast", { event: "typing" }, (payload) => {
-        const { userId, username, avatarUrl, isTyping } = payload.payload;
+        const { userId, username, avatarUrl, isTyping, action } =
+          payload.payload;
         if (userId === user?.id) return;
+
+        const resolvedAction = action || (isTyping ? "typing" : "idle");
 
         setTypingUsers((prev) => {
           if (isTyping) {
             // Добавляем или обновляем
             const exists = prev.find((u) => u.id === userId);
-            if (exists) return prev;
-            return [...prev, { id: userId, username, avatar_url: avatarUrl }];
+            if (exists) {
+              // Обновляем action
+              return prev.map((u) =>
+                u.id === userId ? { ...u, action: resolvedAction } : u,
+              );
+            }
+            return [
+              ...prev,
+              {
+                id: userId,
+                username,
+                avatar_url: avatarUrl,
+                action: resolvedAction,
+              },
+            ];
           } else {
             // Удаляем
             return prev.filter((u) => u.id !== userId);
@@ -1271,15 +1317,53 @@ export default function ChatScreen() {
     if (isTyping && now - lastTypingSentRef.current < 2000) return;
     lastTypingSentRef.current = now;
 
-    channelRef.current.send({
+    const payload = {
+      userId: user.id,
+      username: user.user_metadata?.username || "User",
+      avatarUrl: user.user_metadata?.avatar_url || null,
+      isTyping,
+      action: isTyping ? "typing" : "idle",
+      chatId: id,
+    };
+
+    // Отправляем в основной канал чата (для экрана чата)
+    channelRef.current.send({ type: "broadcast", event: "typing", payload });
+
+    // Отправляем в канал активности (для sidebar/списка чатов)
+    activityChannelRef.current?.send({
       type: "broadcast",
-      event: "typing",
-      payload: {
-        userId: user.id,
-        username: user.user_metadata?.username || "User",
-        avatarUrl: user.user_metadata?.avatar_url || null,
-        isTyping,
-      },
+      event: "activity",
+      payload,
+    });
+  };
+
+  // Отправка индикатора активности (запись аудио, выбор фото и т.д.)
+  const sendActivityIndicator = (
+    action:
+      | "recording_audio"
+      | "recording_video"
+      | "sending_photo"
+      | "sending_file"
+      | "choosing_sticker"
+      | "idle",
+  ) => {
+    if (!user) return;
+
+    const payload = {
+      userId: user.id,
+      username: user.user_metadata?.username || "User",
+      avatarUrl: user.user_metadata?.avatar_url || null,
+      isTyping: action !== "idle",
+      action,
+      chatId: id,
+    };
+
+    // Отправляем в оба канала
+    channelRef.current?.send({ type: "broadcast", event: "typing", payload });
+    activityChannelRef.current?.send({
+      type: "broadcast",
+      event: "activity",
+      payload,
     });
   };
 
@@ -1288,10 +1372,10 @@ export default function ChatScreen() {
     if (!id || !user) return;
 
     try {
-      // Помечаем все непрочитанные сообщения от других пользователей
+      // Помечаем все непрочитанные сообщения от других пользователей как прочитанные и доставленные
       const { error } = await supabase
         .from("messages")
-        .update({ is_read: true })
+        .update({ is_read: true, is_delivered: true })
         .eq("chat_id", id)
         .neq("sender_id", user.id)
         .eq("is_read", false);
@@ -1304,11 +1388,32 @@ export default function ChatScreen() {
     }
   };
 
+  // Пометить сообщения как доставленные (когда получатель в чате)
+  const markMessagesAsDelivered = async () => {
+    if (!id || !user) return;
+
+    try {
+      const { error } = await supabase
+        .from("messages")
+        .update({ is_delivered: true })
+        .eq("chat_id", id)
+        .neq("sender_id", user.id)
+        .eq("is_delivered", false);
+
+      if (error) {
+        console.error("Error marking messages as delivered:", error);
+      }
+    } catch (error) {
+      console.error("Error marking messages as delivered:", error);
+    }
+  };
+
   // Вызываем при загрузке чата и при получении новых сообщений
   useEffect(() => {
     if (id && user && !loading) {
       // Небольшая задержка чтобы сообщения успели загрузиться
       const timer = setTimeout(() => {
+        markMessagesAsDelivered();
         markMessagesAsRead();
       }, 500);
       return () => clearTimeout(timer);
@@ -2119,6 +2224,9 @@ export default function ChatScreen() {
       setIsRecording(true);
       setRecordingDuration(0);
 
+      // Отправляем индикатор записи голосового
+      sendActivityIndicator("recording_audio");
+
       // Таймер для отображения длительности
       recordingTimerRef.current = setInterval(() => {
         setRecordingDuration((prev) => prev + 1);
@@ -2145,6 +2253,9 @@ export default function ChatScreen() {
       setIsRecording(false);
       setRecordingDuration(0);
       setLiveMetering(0);
+
+      // Снимаем индикатор записи
+      sendActivityIndicator("idle");
 
       await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
@@ -3097,7 +3208,13 @@ export default function ChatScreen() {
                   <Text style={{ marginLeft: 4 }}>
                     {" "}
                     <Ionicons
-                      name={item.is_read ? "checkmark-done" : "checkmark"}
+                      name={
+                        item.is_read
+                          ? "checkmark-done"
+                          : item.is_delivered
+                            ? "checkmark-done"
+                            : "checkmark"
+                      }
                       size={14}
                       color={item.is_read ? "#4FC3F7" : colors.messageTime}
                     />
@@ -3281,11 +3398,24 @@ export default function ChatScreen() {
                 style={[
                   styles.headerStatus,
                   !isGroup && isOnline && styles.headerStatusOnline,
+                  typingUsers.length > 0 && styles.headerStatusOnline,
                 ]}
               >
-                {isGroup
-                  ? `${memberCount} участник${memberCount === 1 ? "" : memberCount < 5 ? "а" : "ов"}`
-                  : formatLastSeen()}
+                {typingUsers.length > 0
+                  ? typingUsers.length === 1
+                    ? typingUsers[0].action === "recording_audio"
+                      ? "записывает голосовое..."
+                      : typingUsers[0].action === "recording_video"
+                        ? "записывает видео..."
+                        : typingUsers[0].action === "sending_photo"
+                          ? "отправляет фото..."
+                          : typingUsers[0].action === "sending_file"
+                            ? "отправляет файл..."
+                            : "печатает..."
+                    : `${typingUsers.length} печатают...`
+                  : isGroup
+                    ? `${memberCount} участник${memberCount === 1 ? "" : memberCount < 5 ? "а" : "ов"}`
+                    : formatLastSeen()}
               </Text>
             </View>
           </TouchableOpacity>
@@ -3707,59 +3837,6 @@ export default function ChatScreen() {
               color={isDark ? "#e4e6eb" : "#1a1a1a"}
             />
           </TouchableOpacity>
-        )}
-
-        {/* Typing Indicator */}
-        {typingUsers.length > 0 && (
-          <View style={styles.typingContainer}>
-            <View style={styles.typingAvatars}>
-              {typingUsers.slice(0, 3).map((typingUser, index) => (
-                <View
-                  key={typingUser.id}
-                  style={[
-                    styles.typingAvatarWrapper,
-                    { marginLeft: index > 0 ? -8 : 0, zIndex: 3 - index },
-                  ]}
-                >
-                  {typingUser.avatar_url ? (
-                    <Image
-                      source={{ uri: typingUser.avatar_url }}
-                      style={styles.typingAvatar}
-                    />
-                  ) : (
-                    <View
-                      style={[
-                        styles.typingAvatarPlaceholder,
-                        { backgroundColor: getAvatarColor(typingUser.id) },
-                      ]}
-                    >
-                      <Text style={styles.typingAvatarText}>
-                        {typingUser.username.charAt(0).toUpperCase()}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              ))}
-            </View>
-            <View style={styles.typingBubble}>
-              <View style={styles.typingDots}>
-                <Animated.View
-                  style={[styles.typingDot, { opacity: typingDot1 }]}
-                />
-                <Animated.View
-                  style={[styles.typingDot, { opacity: typingDot2 }]}
-                />
-                <Animated.View
-                  style={[styles.typingDot, { opacity: typingDot3 }]}
-                />
-              </View>
-            </View>
-            <Text style={styles.typingText}>
-              {typingUsers.length === 1
-                ? `${typingUsers[0].username} печатает...`
-                : `${typingUsers.length} печатают...`}
-            </Text>
-          </View>
         )}
       </View>
 
@@ -5052,17 +5129,28 @@ export default function ChatScreen() {
             <Text style={styles.avatarViewerName}>{chatName}</Text>
             {isGroup ? (
               <Text style={styles.avatarViewerSubtitle}>
-                {memberCount} участник
-                {memberCount === 1 ? "" : memberCount < 5 ? "а" : "ов"}
+                {typingUsers.length > 0
+                  ? `${typingUsers.length} печатают...`
+                  : `${memberCount} участник${memberCount === 1 ? "" : memberCount < 5 ? "а" : "ов"}`}
               </Text>
             ) : (
               <Text
                 style={[
                   styles.avatarViewerSubtitle,
-                  isOnline && { color: "#81C784" },
+                  (isOnline || typingUsers.length > 0) && { color: "#81C784" },
                 ]}
               >
-                {formatLastSeen()}
+                {typingUsers.length > 0
+                  ? typingUsers[0].action === "recording_audio"
+                    ? "записывает голосовое..."
+                    : typingUsers[0].action === "recording_video"
+                      ? "записывает видео..."
+                      : typingUsers[0].action === "sending_photo"
+                        ? "отправляет фото..."
+                        : typingUsers[0].action === "sending_file"
+                          ? "отправляет файл..."
+                          : "печатает..."
+                  : formatLastSeen()}
               </Text>
             )}
           </View>

@@ -101,6 +101,7 @@ export interface Database {
           created_at: string;
           updated_at: string | null;
           is_read: boolean;
+          is_delivered: boolean;
           reply_to_id: string | null;
           // Location fields
           latitude: number | null;
@@ -128,6 +129,7 @@ export interface Database {
           created_at?: string;
           updated_at?: string | null;
           is_read?: boolean;
+          is_delivered?: boolean;
           reply_to_id?: string | null;
           latitude?: number | null;
           longitude?: number | null;
@@ -150,6 +152,7 @@ export interface Database {
           updated_at?: string | null;
           created_at?: string;
           is_read?: boolean;
+          is_delivered?: boolean;
           reply_to_id?: string | null;
           latitude?: number | null;
           longitude?: number | null;

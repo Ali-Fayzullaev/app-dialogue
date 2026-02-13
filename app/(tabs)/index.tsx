@@ -8,28 +8,29 @@ import { CachedChat, cacheService } from "@/lib/cache-service";
 import { supabase } from "@/lib/supabase";
 import { Chat, ChatFolderWithCount, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
+import { RealtimeChannel } from "@supabase/supabase-js";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-    Alert,
-    Animated,
-    FlatList,
-    Image,
-    Modal,
-    Platform,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  Animated,
+  FlatList,
+  Image,
+  Modal,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import {
-    GestureHandlerRootView,
-    Swipeable,
+  GestureHandlerRootView,
+  Swipeable,
 } from "react-native-gesture-handler";
 
 interface ChatItem extends Chat {
@@ -59,6 +60,16 @@ export default function ChatsScreen() {
     isOnline?: boolean;
     color: string;
   } | null>(null);
+  const [chatActivities, setChatActivities] = useState<
+    Map<string, { userId: string; username: string; action: string }>
+  >(new Map());
+  const activityTimeoutsRef = useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map());
+  const activityChannelsRef = useRef<RealtimeChannel[]>([]);
+  const activityDot1 = useRef(new Animated.Value(0.3)).current;
+  const activityDot2 = useRef(new Animated.Value(0.3)).current;
+  const activityDot3 = useRef(new Animated.Value(0.3)).current;
   const fabRotation = useRef(new Animated.Value(0)).current;
   const menuScale = useRef(new Animated.Value(0)).current;
   const { user } = useAuth();
@@ -225,7 +236,7 @@ export default function ChatsScreen() {
         // Отметить как прочитанные все сообщения
         const { error } = await supabase
           .from("messages")
-          .update({ is_read: true })
+          .update({ is_read: true, is_delivered: true })
           .eq("chat_id", chat.id)
           .neq("sender_id", user.id)
           .eq("is_read", false);
@@ -551,6 +562,204 @@ export default function ChatsScreen() {
     }, [user, isOffline]),
   );
 
+  // Realtime подписка на новые/обновлённые сообщения для обновления списка чатов
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel("chat-list-realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+        },
+        (payload) => {
+          const newMsg = payload.new as Message;
+
+          setChats((prev) => {
+            const chatIndex = prev.findIndex((c) => c.id === newMsg.chat_id);
+            if (chatIndex === -1) {
+              // Новый чат — перезагрузим всё
+              fetchChats();
+              return prev;
+            }
+
+            const updated = [...prev];
+            const chat = { ...updated[chatIndex] };
+            chat.last_message = newMsg;
+
+            // Если сообщение от другого — увеличиваем счётчик
+            if (newMsg.sender_id !== user.id) {
+              chat.unread_count = (chat.unread_count || 0) + 1;
+            }
+
+            updated[chatIndex] = chat;
+
+            // Перемещаем чат наверх
+            updated.sort((a, b) => {
+              const timeA = a.last_message?.created_at || a.created_at;
+              const timeB = b.last_message?.created_at || b.created_at;
+              return new Date(timeB).getTime() - new Date(timeA).getTime();
+            });
+
+            return updated;
+          });
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "messages",
+        },
+        (payload) => {
+          const updatedMsg = payload.new as Message;
+
+          setChats((prev) =>
+            prev.map((chat) => {
+              if (chat.last_message && chat.last_message.id === updatedMsg.id) {
+                return {
+                  ...chat,
+                  last_message: { ...chat.last_message, ...updatedMsg },
+                };
+              }
+              return chat;
+            }),
+          );
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "messages",
+        },
+        () => {
+          // При удалении сообщения перезагружаем список
+          fetchChats();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
+  // Анимация точек для индикатора активности
+  useEffect(() => {
+    if (chatActivities.size === 0) return;
+
+    const animateDots = () => {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(activityDot1, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(activityDot2, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(activityDot3, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(activityDot1, {
+            toValue: 0.3,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(activityDot2, {
+            toValue: 0.3,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(activityDot3, {
+            toValue: 0.3,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ]),
+      ).start();
+    };
+    animateDots();
+
+    return () => {
+      activityDot1.setValue(0.3);
+      activityDot2.setValue(0.3);
+      activityDot3.setValue(0.3);
+    };
+  }, [chatActivities.size > 0]);
+
+  // Подписка на broadcast-индикаторы активности (печатает, записывает и т.д.)
+  useEffect(() => {
+    if (!user || chats.length === 0) return;
+
+    // Очищаем предыдущие каналы
+    activityChannelsRef.current.forEach((ch) => supabase.removeChannel(ch));
+    activityChannelsRef.current = [];
+
+    // Подписываемся на broadcast каждого чата (макс 30 первых)
+    const chatIds = chats.slice(0, 30).map((c) => c.id);
+
+    chatIds.forEach((chatId) => {
+      const channel = supabase
+        .channel(`activity:${chatId}`)
+        .on("broadcast", { event: "activity" }, (payload) => {
+          const { userId, username, action, isTyping } = payload.payload;
+          if (userId === user.id) return;
+
+          const resolvedAction = action || (isTyping ? "typing" : "idle");
+
+          setChatActivities((prev) => {
+            const updated = new Map(prev);
+            if (resolvedAction === "idle" || !isTyping) {
+              updated.delete(chatId);
+            } else {
+              updated.set(chatId, { userId, username, action: resolvedAction });
+            }
+            return updated;
+          });
+
+          // Очищаем предыдущий таймаут для этого чата
+          const existingTimeout = activityTimeoutsRef.current.get(chatId);
+          if (existingTimeout) clearTimeout(existingTimeout);
+
+          // Автоматически убираем через 4 секунды
+          if (resolvedAction !== "idle") {
+            const timeout = setTimeout(() => {
+              setChatActivities((prev) => {
+                const updated = new Map(prev);
+                updated.delete(chatId);
+                return updated;
+              });
+              activityTimeoutsRef.current.delete(chatId);
+            }, 4000);
+            activityTimeoutsRef.current.set(chatId, timeout);
+          }
+        })
+        .subscribe();
+
+      activityChannelsRef.current.push(channel);
+    });
+
+    return () => {
+      activityChannelsRef.current.forEach((ch) => supabase.removeChannel(ch));
+      activityChannelsRef.current = [];
+      // Очищаем все таймауты
+      activityTimeoutsRef.current.forEach((t) => clearTimeout(t));
+      activityTimeoutsRef.current.clear();
+    };
+  }, [user, chats.map((c) => c.id).join(",")]);
+
   const onRefresh = async () => {
     setRefreshing(true);
     await fetchChats();
@@ -773,34 +982,132 @@ export default function ChatsScreen() {
               </View>
             </View>
             <View style={styles.chatFooter}>
-              <Text
-                style={[
-                  styles.lastMessage,
-                  { color: colors.textSecondary },
-                  item.unread_count > 0 && {
-                    color: colors.text,
-                    fontWeight: "500",
-                  },
-                ]}
-                numberOfLines={1}
-              >
-                {isGroup && item.last_message
-                  ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `
-                  : ""}
-                {item.last_message?.media_type
-                  ? item.last_message.media_type === "image"
-                    ? "Фото"
-                    : item.last_message.media_type === "video"
-                      ? "Видео"
-                      : item.last_message.media_type === "audio"
-                        ? "Аудио"
-                        : item.last_message.media_type === "location"
-                          ? "Геолокация"
-                          : item.last_message.media_type === "file"
-                            ? "Документ"
-                            : item.last_message?.content || "Нет сообщений"
-                  : item.last_message?.content || "Нет сообщений"}
-              </Text>
+              {/* Индикатор активности (печатает, записывает голосовое и т.д.) */}
+              {chatActivities.has(item.id) ? (
+                <View style={styles.activityIndicator}>
+                  <Ionicons
+                    name={
+                      chatActivities.get(item.id)?.action === "recording_audio"
+                        ? "mic"
+                        : chatActivities.get(item.id)?.action ===
+                            "recording_video"
+                          ? "videocam"
+                          : chatActivities.get(item.id)?.action ===
+                              "sending_photo"
+                            ? "camera"
+                            : chatActivities.get(item.id)?.action ===
+                                "sending_file"
+                              ? "document"
+                              : chatActivities.get(item.id)?.action ===
+                                  "choosing_sticker"
+                                ? "happy"
+                                : "ellipsis-horizontal"
+                    }
+                    size={14}
+                    color={colors.primary}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text
+                    style={[styles.activityText, { color: colors.primary }]}
+                    numberOfLines={1}
+                  >
+                    {chatActivities.get(item.id)?.action === "recording_audio"
+                      ? `${chatActivities.get(item.id)?.username} записывает голосовое`
+                      : chatActivities.get(item.id)?.action ===
+                          "recording_video"
+                        ? `${chatActivities.get(item.id)?.username} записывает видео`
+                        : chatActivities.get(item.id)?.action ===
+                            "sending_photo"
+                          ? `${chatActivities.get(item.id)?.username} отправляет фото`
+                          : chatActivities.get(item.id)?.action ===
+                              "sending_file"
+                            ? `${chatActivities.get(item.id)?.username} отправляет файл`
+                            : chatActivities.get(item.id)?.action ===
+                                "choosing_sticker"
+                              ? `${chatActivities.get(item.id)?.username} выбирает стикер`
+                              : `${chatActivities.get(item.id)?.username} печатает`}
+                  </Text>
+                  <View style={styles.activityDots}>
+                    <Animated.View
+                      style={[
+                        styles.activityDot,
+                        {
+                          backgroundColor: colors.primary,
+                          opacity: activityDot1,
+                        },
+                      ]}
+                    />
+                    <Animated.View
+                      style={[
+                        styles.activityDot,
+                        {
+                          backgroundColor: colors.primary,
+                          opacity: activityDot2,
+                        },
+                      ]}
+                    />
+                    <Animated.View
+                      style={[
+                        styles.activityDot,
+                        {
+                          backgroundColor: colors.primary,
+                          opacity: activityDot3,
+                        },
+                      ]}
+                    />
+                  </View>
+                </View>
+              ) : (
+                <Text
+                  style={[
+                    styles.lastMessage,
+                    { color: colors.textSecondary },
+                    item.unread_count > 0 && {
+                      color: colors.text,
+                      fontWeight: "500",
+                    },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {/* Галочки статуса доставки для своих сообщений */}
+                  {item.last_message?.sender_id === user?.id &&
+                    item.last_message && (
+                      <>
+                        <Ionicons
+                          name={
+                            item.last_message.is_read
+                              ? "checkmark-done"
+                              : (item.last_message as any).is_delivered
+                                ? "checkmark-done"
+                                : "checkmark"
+                          }
+                          size={14}
+                          color={
+                            item.last_message.is_read
+                              ? "#4FC3F7"
+                              : colors.textSecondary
+                          }
+                        />{" "}
+                      </>
+                    )}
+                  {isGroup && item.last_message
+                    ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `
+                    : ""}
+                  {item.last_message?.media_type
+                    ? item.last_message.media_type === "image"
+                      ? "Фото"
+                      : item.last_message.media_type === "video"
+                        ? "Видео"
+                        : item.last_message.media_type === "audio"
+                          ? "Аудио"
+                          : item.last_message.media_type === "location"
+                            ? "Геолокация"
+                            : item.last_message.media_type === "file"
+                              ? "Документ"
+                              : item.last_message?.content || "Нет сообщений"
+                    : item.last_message?.content || "Нет сообщений"}
+                </Text>
+              )}
               {item.unread_count > 0 && (
                 <View
                   style={[
@@ -2072,5 +2379,29 @@ const styles = StyleSheet.create({
   folderTabBadgeText: {
     fontSize: 11,
     fontWeight: "700",
+  },
+  // Activity Indicator
+  activityIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 8,
+  },
+  activityText: {
+    fontSize: 14,
+    fontWeight: "500",
+    fontStyle: "italic",
+    flexShrink: 1,
+  },
+  activityDots: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: 2,
+    gap: 2,
+  },
+  activityDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
   },
 });

@@ -38,6 +38,7 @@ interface ChatItem extends Chat {
   unread_count: number;
   other_user_online: boolean;
   is_archived: boolean;
+  is_muted: boolean;
 }
 
 export default function ChatsScreen() {
@@ -130,6 +131,37 @@ export default function ChatsScreen() {
       }
     } catch (error) {
       console.error("Error toggling archive:", error);
+    }
+
+    setShowChatMenu(false);
+    setSelectedChat(null);
+  };
+
+  const toggleMuteChat = async (chat: ChatItem) => {
+    if (!user) return;
+
+    try {
+      const newMutedState = !chat.is_muted;
+
+      const { error } = await supabase
+        .from("chat_members")
+        .update({ is_muted: newMutedState })
+        .eq("chat_id", chat.id)
+        .eq("user_id", user.id);
+
+      if (error) throw error;
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chat.id ? { ...c, is_muted: newMutedState } : c,
+        ),
+      );
+
+      if (Platform.OS !== "web") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (error) {
+      console.error("Error toggling mute:", error);
     }
 
     setShowChatMenu(false);
@@ -261,6 +293,7 @@ export default function ChatsScreen() {
         unread_count: cached.unread_count,
         other_user_online: false,
         is_archived: false, // Кеш не хранит архивный статус
+        is_muted: false,
       }));
       setChats(chatItems);
     }
@@ -279,7 +312,7 @@ export default function ChatsScreen() {
     try {
       const { data: chatMembers, error: memberError } = await supabase
         .from("chat_members")
-        .select("chat_id, is_archived")
+        .select("chat_id, is_archived, is_muted")
         .eq("user_id", user.id);
 
       if (memberError) throw memberError;
@@ -289,9 +322,12 @@ export default function ChatsScreen() {
         return;
       }
 
-      // Создаем Map для быстрого доступа к is_archived
+      // Создаем Map для быстрого доступа к is_archived и is_muted
       const archivedMap = new Map(
         chatMembers.map((cm) => [cm.chat_id, cm.is_archived ?? false]),
+      );
+      const mutedMap = new Map(
+        chatMembers.map((cm) => [cm.chat_id, cm.is_muted ?? false]),
       );
       const chatIds = chatMembers.map((cm) => cm.chat_id);
 
@@ -355,6 +391,7 @@ export default function ChatsScreen() {
             unread_count: unreadCount || 0,
             other_user_online: otherUserOnline,
             is_archived: archivedMap.get(chat.id) || false,
+            is_muted: mutedMap.get(chat.id) || false,
           };
         }),
       );
@@ -768,13 +805,25 @@ export default function ChatsScreen() {
                 <View
                   style={[
                     styles.unreadBadge,
-                    { backgroundColor: colors.primary },
+                    {
+                      backgroundColor: item.is_muted
+                        ? colors.textSecondary
+                        : colors.primary,
+                    },
                   ]}
                 >
                   <Text style={styles.unreadBadgeText}>
                     {item.unread_count > 99 ? "99+" : item.unread_count}
                   </Text>
                 </View>
+              )}
+              {item.is_muted && (
+                <Ionicons
+                  name="notifications-off"
+                  size={16}
+                  color={colors.textSecondary}
+                  style={{ marginLeft: 4 }}
+                />
               )}
             </View>
           </View>
@@ -1355,6 +1404,35 @@ export default function ChatsScreen() {
                   {selectedChat?.is_archived
                     ? "Разархивировать"
                     : "Архивировать"}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Мьют */}
+              <TouchableOpacity
+                style={styles.chatMenuItem}
+                onPress={() => selectedChat && toggleMuteChat(selectedChat)}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.chatMenuIconCircle,
+                    { backgroundColor: "#8E8E93" },
+                  ]}
+                >
+                  <Ionicons
+                    name={
+                      selectedChat?.is_muted
+                        ? "notifications"
+                        : "notifications-off"
+                    }
+                    size={18}
+                    color="#fff"
+                  />
+                </View>
+                <Text style={[styles.chatMenuItemText, { color: colors.text }]}>
+                  {selectedChat?.is_muted
+                    ? "Включить уведомления"
+                    : "Отключить уведомления"}
                 </Text>
               </TouchableOpacity>
 

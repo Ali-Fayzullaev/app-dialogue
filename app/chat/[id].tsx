@@ -188,6 +188,26 @@ export default function ChatScreen() {
   const [isBlocked, setIsBlocked] = useState(false); // Я заблокировал собеседника
   const [isBlockedByOther, setIsBlockedByOther] = useState(false); // Собеседник заблокировал меня
 
+  // Мьют чата
+  const [isMuted, setIsMuted] = useState(false);
+
+  // Пересылка сообщения
+  const [forwardingMessage, setForwardingMessage] =
+    useState<MessageWithSender | null>(null);
+  const [showForwardModal, setShowForwardModal] = useState(false);
+  const [forwardChats, setForwardChats] = useState<
+    { id: string; name: string; avatar_url: string | null; is_group: boolean }[]
+  >([]);
+  const [forwardSearch, setForwardSearch] = useState("");
+  const [forwardSending, setForwardSending] = useState(false);
+
+  // Мультивыбор сообщений
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(
+    new Set(),
+  );
+  const MAX_SELECT = 30;
+
   // Анимация точек печатания
   useEffect(() => {
     if (typingUsers.length > 0) {
@@ -322,10 +342,14 @@ export default function ChatScreen() {
       // Получаем участников
       const { data: members } = await supabase
         .from("chat_members")
-        .select("user_id")
+        .select("user_id, is_muted")
         .eq("chat_id", id);
 
       setMemberCount(members?.length || 0);
+
+      // Загружаем статус мьюта
+      const myMembership = members?.find((m) => m.user_id === user.id);
+      setIsMuted(myMembership?.is_muted ?? false);
 
       if (chat.is_group) {
         // Для группы используем имя группы
@@ -562,24 +586,30 @@ export default function ChatScreen() {
         );
       }
 
-      const messagesWithSenders: MessageWithSender[] = (data || []).map((m) => {
-        const repliedMsg = m.reply_to_id
-          ? repliedMessagesMap.get(m.reply_to_id)
-          : null;
-        return {
-          ...m,
-          sender: profileMap.get(m.sender_id) || null,
-          replied_message: repliedMsg
-            ? {
-                id: repliedMsg.id,
-                content: repliedMsg.content,
-                sender: profileMap.get(repliedMsg.sender_id) || null,
-                media_type: repliedMsg.media_type,
-              }
-            : null,
-          reactions: [],
-        };
-      });
+      const messagesWithSenders: MessageWithSender[] = (data || [])
+        .filter((m) => {
+          // Фильтруем сообщения, удалённые "для себя"
+          const deletedFor = (m as any).deleted_for_users || [];
+          return !deletedFor.includes(user?.id);
+        })
+        .map((m) => {
+          const repliedMsg = m.reply_to_id
+            ? repliedMessagesMap.get(m.reply_to_id)
+            : null;
+          return {
+            ...m,
+            sender: profileMap.get(m.sender_id) || null,
+            replied_message: repliedMsg
+              ? {
+                  id: repliedMsg.id,
+                  content: repliedMsg.content,
+                  sender: profileMap.get(repliedMsg.sender_id) || null,
+                  media_type: repliedMsg.media_type,
+                }
+              : null,
+            reactions: [],
+          };
+        });
 
       setMessages(messagesWithSenders);
 
@@ -1354,6 +1384,317 @@ export default function ChatScreen() {
     }
   };
 
+  // Мьют чата
+  const toggleMuteChat = async () => {
+    if (!user || !id) return;
+    try {
+      const newMutedState = !isMuted;
+      const { error } = await supabase
+        .from("chat_members")
+        .update({ is_muted: newMutedState })
+        .eq("chat_id", id)
+        .eq("user_id", user.id);
+
+      if (error) throw error;
+      setIsMuted(newMutedState);
+      safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error("Error toggling mute:", error);
+    }
+  };
+
+  // Пересылка сообщения — загрузка списка чатов
+  const loadForwardChats = async () => {
+    if (!user) return;
+    try {
+      const { data: chatMembers } = await supabase
+        .from("chat_members")
+        .select("chat_id")
+        .eq("user_id", user.id);
+
+      if (!chatMembers) return;
+      const chatIds = chatMembers.map((cm) => cm.chat_id);
+
+      const { data: chatsData } = await supabase
+        .from("chats")
+        .select("*")
+        .in("id", chatIds);
+
+      if (!chatsData) return;
+
+      const chatsWithNames = await Promise.all(
+        chatsData.map(async (chat) => {
+          if (chat.is_group) {
+            return {
+              id: chat.id,
+              name: chat.name || "Группа",
+              avatar_url: chat.avatar_url,
+              is_group: true,
+            };
+          }
+          const { data: members } = await supabase
+            .from("chat_members")
+            .select("user_id")
+            .eq("chat_id", chat.id)
+            .neq("user_id", user.id);
+
+          if (members && members.length > 0) {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("username, avatar_url")
+              .eq("id", members[0].user_id)
+              .single();
+            return {
+              id: chat.id,
+              name: profile?.username || "Чат",
+              avatar_url: profile?.avatar_url || null,
+              is_group: false,
+            };
+          }
+          return {
+            id: chat.id,
+            name: "Чат",
+            avatar_url: null,
+            is_group: false,
+          };
+        }),
+      );
+
+      setForwardChats(chatsWithNames);
+    } catch (error) {
+      console.error("Error loading chats for forward:", error);
+    }
+  };
+
+  // Открыть модалку пересылки (одно сообщение)
+  const openForwardModal = async (message: MessageWithSender) => {
+    if (!user) return;
+    setForwardingMessage(message);
+    setForwardSearch("");
+    setForwardSending(false);
+    await loadForwardChats();
+    setShowForwardModal(true);
+  };
+
+  // Открыть модалку пересылки (мультивыбор)
+  const openForwardModalMulti = async () => {
+    if (!user || selectedMessages.size === 0) return;
+    setForwardingMessage(null);
+    setForwardSearch("");
+    setForwardSending(false);
+    await loadForwardChats();
+    setShowForwardModal(true);
+  };
+
+  // Пересылка сообщений в выбранный чат
+  const forwardMessagesToChat = async (targetChatId: string) => {
+    if (!user || forwardSending) return;
+
+    setForwardSending(true);
+    try {
+      // Собираем сообщения для пересылки
+      let messagesToForward: MessageWithSender[] = [];
+
+      if (forwardingMessage) {
+        // Одиночная пересылка
+        messagesToForward = [forwardingMessage];
+      } else {
+        // Мультивыбор — собираем выбранные и сортируем по времени
+        messagesToForward = messages
+          .filter((m) => selectedMessages.has(m.id))
+          .sort(
+            (a, b) =>
+              new Date(a.created_at).getTime() -
+              new Date(b.created_at).getTime(),
+          );
+      }
+
+      if (messagesToForward.length === 0) return;
+
+      // Формируем массив записей для вставки
+      const inserts = messagesToForward.map((msg) => {
+        const senderName = msg.sender?.username || "Неизвестный";
+        const data: any = {
+          chat_id: targetChatId,
+          sender_id: user.id,
+          content: msg.content || "",
+          forwarded_from_id: msg.id,
+          forwarded_from_username: senderName,
+        };
+        if (msg.media_url) {
+          data.media_url = msg.media_url;
+          data.media_type = msg.media_type;
+        }
+        if (msg.file_name) {
+          data.file_name = msg.file_name;
+          data.file_size = msg.file_size;
+        }
+        if (msg.latitude) {
+          data.latitude = msg.latitude;
+          data.longitude = msg.longitude;
+          data.location_name = msg.location_name;
+        }
+        if (msg.audio_waveform) {
+          data.audio_waveform = msg.audio_waveform;
+          data.audio_duration = msg.audio_duration;
+        }
+        return data;
+      });
+
+      const { error } = await supabase.from("messages").insert(inserts);
+      if (error) throw error;
+
+      safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+      setShowForwardModal(false);
+      setForwardingMessage(null);
+      exitSelectMode();
+
+      if (targetChatId !== id) {
+        router.push(`/chat/${targetChatId}` as any);
+      }
+    } catch (error) {
+      console.error("Error forwarding message:", error);
+      Alert.alert("Ошибка", "Не удалось переслать сообщения");
+    } finally {
+      setForwardSending(false);
+    }
+  };
+
+  // Мультивыбор — переключение выбора
+  const toggleSelectMessage = (messageId: string) => {
+    setSelectedMessages((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+        if (next.size === 0) {
+          setIsSelectMode(false);
+        }
+      } else {
+        if (next.size >= MAX_SELECT) {
+          Alert.alert(
+            "Лимит",
+            `Можно выбрать максимум ${MAX_SELECT} сообщений`,
+          );
+          return prev;
+        }
+        next.add(messageId);
+      }
+      return next;
+    });
+  };
+
+  // Выход из режима выбора
+  const exitSelectMode = () => {
+    setIsSelectMode(false);
+    setSelectedMessages(new Set());
+  };
+
+  // Удалить выбранные сообщения
+  const deleteSelectedMessages = () => {
+    if (!user || selectedMessages.size === 0) return;
+
+    const selectedMsgs = messages.filter((m) => selectedMessages.has(m.id));
+    const myMessages = selectedMsgs.filter((m) => m.sender_id === user.id);
+    const hasOthers = selectedMsgs.length > myMessages.length;
+
+    const buttons: any[] = [{ text: "Отмена", style: "cancel" }];
+
+    // "Удалить для себя" — всегда доступно для всех сообщений
+    buttons.push({
+      text: `Удалить для себя (${selectedMsgs.length})`,
+      onPress: async () => {
+        try {
+          const results = await Promise.all(
+            selectedMsgs.map(async (msg) => {
+              const { data } = await supabase
+                .from("messages")
+                .select("deleted_for_users")
+                .eq("id", msg.id)
+                .single();
+
+              const currentList: string[] =
+                (data as any)?.deleted_for_users || [];
+              const updated = [...currentList, user.id];
+
+              return supabase
+                .from("messages")
+                .update({ deleted_for_users: updated } as any)
+                .eq("id", msg.id);
+            }),
+          );
+
+          const ids = selectedMsgs.map((m) => m.id);
+          setMessages((prev) => prev.filter((m) => !ids.includes(m.id)));
+          safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+          exitSelectMode();
+        } catch (error) {
+          console.error("Error deleting messages for me:", error);
+          Alert.alert("Ошибка", "Не удалось удалить сообщения");
+        }
+      },
+    });
+
+    // "Удалить для всех" — только если есть свои сообщения
+    if (myMessages.length > 0) {
+      const extraNote = hasOthers
+        ? `\n(чужие сообщения будут удалены только для вас)`
+        : "";
+      buttons.push({
+        text: `Удалить для всех (${myMessages.length})`,
+        style: "destructive",
+        onPress: async () => {
+          try {
+            // Свои — удаляем полностью
+            await Promise.all(
+              myMessages.map((msg) =>
+                supabase.from("messages").delete().eq("id", msg.id),
+              ),
+            );
+
+            // Чужие — мягкое удаление для себя
+            const otherMsgs = selectedMsgs.filter(
+              (m) => m.sender_id !== user.id,
+            );
+            if (otherMsgs.length > 0) {
+              await Promise.all(
+                otherMsgs.map(async (msg) => {
+                  const { data } = await supabase
+                    .from("messages")
+                    .select("deleted_for_users")
+                    .eq("id", msg.id)
+                    .single();
+
+                  const currentList: string[] =
+                    (data as any)?.deleted_for_users || [];
+                  const updated = [...currentList, user.id];
+
+                  return supabase
+                    .from("messages")
+                    .update({ deleted_for_users: updated } as any)
+                    .eq("id", msg.id);
+                }),
+              );
+            }
+
+            const ids = selectedMsgs.map((m) => m.id);
+            setMessages((prev) => prev.filter((m) => !ids.includes(m.id)));
+            safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+            exitSelectMode();
+          } catch (error) {
+            console.error("Error deleting messages for all:", error);
+            Alert.alert("Ошибка", "Не удалось удалить сообщения");
+          }
+        },
+      });
+    }
+
+    Alert.alert(
+      "Удалить сообщения",
+      `Выбрано: ${selectedMsgs.length}`,
+      buttons,
+    );
+  };
+
   const handleMessageLongPress = (message: MessageWithSender) => {
     // Показываем панель быстрых реакций и меню
     safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
@@ -1382,7 +1723,7 @@ export default function ChatScreen() {
   };
 
   const handleMenuAction = (
-    action: "copy" | "edit" | "delete" | "reply" | "pin",
+    action: "copy" | "edit" | "delete" | "reply" | "pin" | "forward" | "select",
   ) => {
     const messageToProcess = selectedMessage;
     closeMessageMenu();
@@ -1395,6 +1736,14 @@ export default function ChatScreen() {
           setReplyingTo(messageToProcess);
           safeHaptic(Haptics.ImpactFeedbackStyle.Light);
           break;
+        case "forward":
+          openForwardModal(messageToProcess);
+          break;
+        case "select":
+          setIsSelectMode(true);
+          setSelectedMessages(new Set([messageToProcess.id]));
+          safeHaptic(Haptics.ImpactFeedbackStyle.Medium);
+          break;
         case "edit":
           if (
             messageToProcess.content &&
@@ -1404,9 +1753,7 @@ export default function ChatScreen() {
           }
           break;
         case "delete":
-          if (messageToProcess.sender_id === user?.id) {
-            confirmDeleteMessage(messageToProcess);
-          }
+          confirmDeleteMessage(messageToProcess);
           break;
         case "copy":
           // Копирование текста в буфер обмена
@@ -1574,17 +1921,65 @@ export default function ChatScreen() {
   };
 
   const confirmDeleteMessage = (message: MessageWithSender) => {
-    Alert.alert("Удалить сообщение?", "Это действие нельзя отменить", [
-      { text: "Отмена", style: "cancel" },
-      {
-        text: "Удалить",
-        style: "destructive",
-        onPress: () => deleteMessage(message.id),
-      },
-    ]);
+    const isMyMessage = message.sender_id === user?.id;
+
+    if (isMyMessage) {
+      // Своё сообщение — два варианта
+      Alert.alert("Удалить сообщение", "Выберите вариант удаления", [
+        { text: "Отмена", style: "cancel" },
+        {
+          text: "Удалить для себя",
+          onPress: () => deleteMessageForMe(message.id),
+        },
+        {
+          text: "Удалить для всех",
+          style: "destructive",
+          onPress: () => deleteMessageForAll(message.id),
+        },
+      ]);
+    } else {
+      // Чужое сообщение — только "для себя"
+      Alert.alert("Удалить сообщение", "Сообщение будет удалено только у вас", [
+        { text: "Отмена", style: "cancel" },
+        {
+          text: "Удалить для себя",
+          style: "destructive",
+          onPress: () => deleteMessageForMe(message.id),
+        },
+      ]);
+    }
   };
 
-  const deleteMessage = async (messageId: string) => {
+  // Удалить для себя — мягкое удаление
+  const deleteMessageForMe = async (messageId: string) => {
+    if (!user) return;
+    try {
+      const { data: msg } = await supabase
+        .from("messages")
+        .select("deleted_for_users")
+        .eq("id", messageId)
+        .single();
+
+      const currentList: string[] = (msg as any)?.deleted_for_users || [];
+      const updated = [...currentList, user.id];
+
+      const { error } = await supabase
+        .from("messages")
+        .update({ deleted_for_users: updated } as any)
+        .eq("id", messageId);
+
+      if (error) throw error;
+
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error("Error deleting message for me:", error);
+      Alert.alert("Ошибка", "Не удалось удалить сообщение");
+    }
+  };
+
+  // Удалить для всех — полное удаление из БД
+  const deleteMessageForAll = async (messageId: string) => {
     try {
       const { error } = await supabase
         .from("messages")
@@ -2309,6 +2704,8 @@ export default function ChatScreen() {
     const showDate = shouldShowDateSeparator(index);
     const isHighlighted = highlightedMessageId === item.id;
 
+    const isSelected = selectedMessages.has(item.id);
+
     return (
       <>
         {showDate && (
@@ -2334,6 +2731,11 @@ export default function ChatScreen() {
                 },
               ],
             },
+            isSelected && {
+              backgroundColor: isDark
+                ? "rgba(0,150,136,0.15)"
+                : "rgba(0,150,136,0.08)",
+            },
           ]}
         >
           <TouchableOpacity
@@ -2343,10 +2745,33 @@ export default function ChatScreen() {
                 ? styles.myMessageContainer
                 : styles.otherMessageContainer,
             ]}
-            onLongPress={() => handleMessageLongPress(item)}
-            activeOpacity={0.8}
+            onLongPress={() => {
+              if (isSelectMode) {
+                toggleSelectMessage(item.id);
+              } else {
+                handleMessageLongPress(item);
+              }
+            }}
+            onPress={
+              isSelectMode ? () => toggleSelectMessage(item.id) : undefined
+            }
+            activeOpacity={isSelectMode ? 0.6 : 0.8}
             delayLongPress={300}
           >
+            {/* Чекбокс в режиме выбора */}
+            {isSelectMode && (
+              <View
+                style={[
+                  styles.selectCheckbox,
+                  isSelected && styles.selectCheckboxSelected,
+                  isSelected && { backgroundColor: colors.primary },
+                ]}
+              >
+                {isSelected && (
+                  <Ionicons name="checkmark" size={16} color="#fff" />
+                )}
+              </View>
+            )}
             <View
               style={[
                 styles.messageBubble,
@@ -2373,6 +2798,40 @@ export default function ChatScreen() {
                   {item.sender.username}
                 </Text>
               )}
+
+              {/* Forwarded from label */}
+              {item.forwarded_from_username && (
+                <View style={styles.forwardedLabel}>
+                  <Ionicons
+                    name="arrow-redo"
+                    size={13}
+                    color={
+                      isMyMessage
+                        ? isDark
+                          ? "rgba(255,255,255,0.7)"
+                          : colors.primary
+                        : colors.primary
+                    }
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text
+                    style={[
+                      styles.forwardedText,
+                      {
+                        color: isMyMessage
+                          ? isDark
+                            ? "rgba(255,255,255,0.7)"
+                            : colors.primary
+                          : colors.primary,
+                      },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    Переслано от {item.forwarded_from_username}
+                  </Text>
+                </View>
+              )}
+
               {/* Replied message quote */}
               {item.replied_message && (
                 <TouchableOpacity
@@ -2692,214 +3151,270 @@ export default function ChatScreen() {
       keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
     >
       {/* Custom Header */}
-      <View style={[styles.header, { backgroundColor: colors.primary }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => {
-            safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-            if (router.canGoBack()) {
-              router.back();
-            } else {
-              router.replace("/(tabs)");
-            }
-          }}
-        >
-          <Ionicons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.headerProfile}
-          onPress={() => {
-            safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-            if (isGroup) {
-              router.push(`/group/${id}/settings` as any);
-            } else if (otherUser?.id) {
-              router.push(`/profile/${otherUser.id}` as any);
-            }
-          }}
-          activeOpacity={0.7}
-        >
-          {/* Avatar - открывает просмотр */}
+      {isSelectMode ? (
+        <View style={[styles.header, { backgroundColor: colors.primary }]}>
           <TouchableOpacity
+            style={styles.backButton}
             onPress={() => {
               safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-              const hasAvatar = isGroup
-                ? !!chatAvatarUrl
-                : !!otherUser?.avatar_url;
-              if (hasAvatar || !isGroup) {
-                setShowAvatarViewer(true);
+              exitSelectMode();
+            }}
+          >
+            <Ionicons name="close" size={26} color="#fff" />
+          </TouchableOpacity>
+          <View style={styles.headerInfo}>
+            <Text style={styles.headerName}>
+              {selectedMessages.size} выбрано
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.headerSearchButton}
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              openForwardModalMulti();
+            }}
+          >
+            <Ionicons name="arrow-redo" size={22} color="#fff" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.headerSearchButton}
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              deleteSelectedMessages();
+            }}
+          >
+            <Ionicons name="trash" size={22} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={[styles.header, { backgroundColor: colors.primary }]}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              if (router.canGoBack()) {
+                router.back();
+              } else {
+                router.replace("/(tabs)");
               }
             }}
-            activeOpacity={0.8}
           >
-            {isGroup ? (
-              // Аватар группы
-              <View style={styles.avatarWrapper}>
-                {chatAvatarUrl ? (
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.headerProfile}
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              if (isGroup) {
+                router.push(`/group/${id}/settings` as any);
+              } else if (otherUser?.id) {
+                router.push(`/profile/${otherUser.id}` as any);
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            {/* Avatar - открывает просмотр */}
+            <TouchableOpacity
+              onPress={() => {
+                safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+                const hasAvatar = isGroup
+                  ? !!chatAvatarUrl
+                  : !!otherUser?.avatar_url;
+                if (hasAvatar || !isGroup) {
+                  setShowAvatarViewer(true);
+                }
+              }}
+              activeOpacity={0.8}
+            >
+              {isGroup ? (
+                // Аватар группы
+                <View style={styles.avatarWrapper}>
+                  {chatAvatarUrl ? (
+                    <Image
+                      source={{ uri: chatAvatarUrl }}
+                      style={styles.headerAvatarImage}
+                    />
+                  ) : (
+                    <View
+                      style={[
+                        styles.headerAvatar,
+                        { backgroundColor: groupAvatarColor },
+                      ]}
+                    >
+                      <Ionicons
+                        name="people"
+                        size={20}
+                        color={colors.textLight}
+                      />
+                    </View>
+                  )}
+                </View>
+              ) : otherUser?.avatar_url ? (
+                <View style={styles.avatarWrapper}>
                   <Image
-                    source={{ uri: chatAvatarUrl }}
+                    source={{ uri: otherUser.avatar_url }}
                     style={styles.headerAvatarImage}
                   />
-                ) : (
+                  {isOnline && <View style={styles.onlineIndicator} />}
+                </View>
+              ) : (
+                <View style={styles.avatarWrapper}>
                   <View
                     style={[
                       styles.headerAvatar,
-                      { backgroundColor: groupAvatarColor },
+                      { backgroundColor: avatarColor },
                     ]}
                   >
-                    <Ionicons
-                      name="people"
-                      size={20}
-                      color={colors.textLight}
-                    />
+                    <Text style={styles.headerAvatarText}>
+                      {chatName.charAt(0).toUpperCase()}
+                    </Text>
                   </View>
-                )}
-              </View>
-            ) : otherUser?.avatar_url ? (
-              <View style={styles.avatarWrapper}>
-                <Image
-                  source={{ uri: otherUser.avatar_url }}
-                  style={styles.headerAvatarImage}
-                />
-                {isOnline && <View style={styles.onlineIndicator} />}
-              </View>
-            ) : (
-              <View style={styles.avatarWrapper}>
-                <View
-                  style={[
-                    styles.headerAvatar,
-                    { backgroundColor: avatarColor },
-                  ]}
-                >
-                  <Text style={styles.headerAvatarText}>
-                    {chatName.charAt(0).toUpperCase()}
-                  </Text>
+                  {isOnline && <View style={styles.onlineIndicator} />}
                 </View>
-                {isOnline && <View style={styles.onlineIndicator} />}
-              </View>
-            )}
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.headerInfo}>
+              <Text style={styles.headerName}>{chatName}</Text>
+              <Text
+                style={[
+                  styles.headerStatus,
+                  !isGroup && isOnline && styles.headerStatusOnline,
+                ]}
+              >
+                {isGroup
+                  ? `${memberCount} участник${memberCount === 1 ? "" : memberCount < 5 ? "а" : "ов"}`
+                  : formatLastSeen()}
+              </Text>
+            </View>
           </TouchableOpacity>
 
-          <View style={styles.headerInfo}>
-            <Text style={styles.headerName}>{chatName}</Text>
-            <Text
-              style={[
-                styles.headerStatus,
-                !isGroup && isOnline && styles.headerStatusOnline,
-              ]}
-            >
-              {isGroup
-                ? `${memberCount} участник${memberCount === 1 ? "" : memberCount < 5 ? "а" : "ов"}`
-                : formatLastSeen()}
-            </Text>
-          </View>
-        </TouchableOpacity>
+          {/* Кнопка мьюта */}
+          <TouchableOpacity
+            style={styles.headerSearchButton}
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              toggleMuteChat();
+            }}
+          >
+            <Ionicons
+              name={isMuted ? "notifications-off" : "notifications"}
+              size={20}
+              color={colors.textLight}
+            />
+          </TouchableOpacity>
 
-        {/* Кнопка поиска */}
-        <TouchableOpacity
-          style={styles.headerSearchButton}
-          onPress={() => {
-            safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-            openSearch();
-          }}
-        >
-          <Ionicons name="search" size={22} color={colors.textLight} />
-        </TouchableOpacity>
+          {/* Кнопка поиска */}
+          <TouchableOpacity
+            style={styles.headerSearchButton}
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              openSearch();
+            }}
+          >
+            <Ionicons name="search" size={22} color={colors.textLight} />
+          </TouchableOpacity>
 
-        {/* Кнопка меню/настроек */}
-        <TouchableOpacity
-          style={styles.headerSettingsButton}
-          onPress={() => {
-            safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-            if (isGroup) {
-              router.push(`/group/${id}/settings` as any);
-            } else {
-              // Показать меню действий для личного чата
-              if (Platform.OS === "ios") {
-                ActionSheetIOS.showActionSheetWithOptions(
-                  {
-                    options: ["Очистить историю", "Открыть профиль", "Отмена"],
-                    destructiveButtonIndex: 0,
-                    cancelButtonIndex: 2,
-                  },
-                  async (buttonIndex) => {
-                    if (buttonIndex === 0) {
-                      Alert.alert(
-                        "Очистить историю",
-                        "Удалить все сообщения в этом чате? Это действие нельзя отменить.",
-                        [
-                          { text: "Отмена", style: "cancel" },
-                          {
-                            text: "Очистить",
-                            style: "destructive",
-                            onPress: async () => {
-                              const { error } = await supabase
-                                .from("messages")
-                                .delete()
-                                .eq("chat_id", id);
-                              if (!error) {
-                                setMessages([]);
-                                Alert.alert("Готово", "История чата очищена");
-                              }
-                            },
-                          },
-                        ],
-                      );
-                    } else if (buttonIndex === 1 && otherUser?.id) {
-                      router.push(`/profile/${otherUser.id}` as any);
-                    }
-                  },
-                );
+          {/* Кнопка меню/настроек */}
+          <TouchableOpacity
+            style={styles.headerSettingsButton}
+            onPress={() => {
+              safeHaptic(Haptics.ImpactFeedbackStyle.Light);
+              if (isGroup) {
+                router.push(`/group/${id}/settings` as any);
               } else {
-                Alert.alert("Действия", "Выберите действие", [
-                  {
-                    text: "Очистить историю",
-                    style: "destructive",
-                    onPress: () => {
-                      Alert.alert(
+                // Показать меню действий для личного чата
+                if (Platform.OS === "ios") {
+                  ActionSheetIOS.showActionSheetWithOptions(
+                    {
+                      options: [
                         "Очистить историю",
-                        "Удалить все сообщения в этом чате?",
-                        [
-                          { text: "Отмена", style: "cancel" },
-                          {
-                            text: "Очистить",
-                            style: "destructive",
-                            onPress: async () => {
-                              const { error } = await supabase
-                                .from("messages")
-                                .delete()
-                                .eq("chat_id", id);
-                              if (!error) {
-                                setMessages([]);
-                                Alert.alert("Готово", "История чата очищена");
-                              }
-                            },
-                          },
-                        ],
-                      );
+                        "Открыть профиль",
+                        "Отмена",
+                      ],
+                      destructiveButtonIndex: 0,
+                      cancelButtonIndex: 2,
                     },
-                  },
-                  {
-                    text: "Открыть профиль",
-                    onPress: () => {
-                      if (otherUser?.id) {
+                    async (buttonIndex) => {
+                      if (buttonIndex === 0) {
+                        Alert.alert(
+                          "Очистить историю",
+                          "Удалить все сообщения в этом чате? Это действие нельзя отменить.",
+                          [
+                            { text: "Отмена", style: "cancel" },
+                            {
+                              text: "Очистить",
+                              style: "destructive",
+                              onPress: async () => {
+                                const { error } = await supabase
+                                  .from("messages")
+                                  .delete()
+                                  .eq("chat_id", id);
+                                if (!error) {
+                                  setMessages([]);
+                                  Alert.alert("Готово", "История чата очищена");
+                                }
+                              },
+                            },
+                          ],
+                        );
+                      } else if (buttonIndex === 1 && otherUser?.id) {
                         router.push(`/profile/${otherUser.id}` as any);
                       }
                     },
-                  },
-                  { text: "Отмена", style: "cancel" },
-                ]);
+                  );
+                } else {
+                  Alert.alert("Действия", "Выберите действие", [
+                    {
+                      text: "Очистить историю",
+                      style: "destructive",
+                      onPress: () => {
+                        Alert.alert(
+                          "Очистить историю",
+                          "Удалить все сообщения в этом чате?",
+                          [
+                            { text: "Отмена", style: "cancel" },
+                            {
+                              text: "Очистить",
+                              style: "destructive",
+                              onPress: async () => {
+                                const { error } = await supabase
+                                  .from("messages")
+                                  .delete()
+                                  .eq("chat_id", id);
+                                if (!error) {
+                                  setMessages([]);
+                                  Alert.alert("Готово", "История чата очищена");
+                                }
+                              },
+                            },
+                          ],
+                        );
+                      },
+                    },
+                    {
+                      text: "Открыть профиль",
+                      onPress: () => {
+                        if (otherUser?.id) {
+                          router.push(`/profile/${otherUser.id}` as any);
+                        }
+                      },
+                    },
+                    { text: "Отмена", style: "cancel" },
+                  ]);
+                }
               }
-            }
-          }}
-        >
-          <Ionicons
-            name={isGroup ? "settings-outline" : "ellipsis-vertical"}
-            size={22}
-            color={colors.textLight}
-          />
-        </TouchableOpacity>
-      </View>
+            }}
+          >
+            <Ionicons
+              name={isGroup ? "settings-outline" : "ellipsis-vertical"}
+              size={22}
+              color={colors.textLight}
+            />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Search Bar */}
       {showSearch && (
@@ -3963,6 +4478,22 @@ export default function ChatScreen() {
                   </Text>
                 </TouchableOpacity>
 
+                {/* Переслать */}
+                <TouchableOpacity
+                  style={styles.blurActionItem}
+                  onPress={() => handleMenuAction("forward")}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="arrow-redo-outline"
+                    size={24}
+                    color={isDark ? "#80CBC4" : "#00897B"}
+                  />
+                  <Text style={[styles.blurActionText, { color: colors.text }]}>
+                    Переслать
+                  </Text>
+                </TouchableOpacity>
+
                 {/* Копировать */}
                 {selectedMessage.content && (
                   <TouchableOpacity
@@ -4040,32 +4571,180 @@ export default function ChatScreen() {
                   </Text>
                 </TouchableOpacity>
 
+                {/* Выбрать */}
+                <TouchableOpacity
+                  style={styles.blurActionItem}
+                  onPress={() => handleMenuAction("select")}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="checkbox-outline"
+                    size={24}
+                    color={isDark ? "#B0BEC5" : "#607D8B"}
+                  />
+                  <Text style={[styles.blurActionText, { color: colors.text }]}>
+                    Выбрать
+                  </Text>
+                </TouchableOpacity>
+
                 {/* Удалить */}
-                {selectedMessage.sender_id === user?.id && (
-                  <TouchableOpacity
-                    style={styles.blurActionItem}
-                    onPress={() => handleMenuAction("delete")}
-                    activeOpacity={0.7}
+                <TouchableOpacity
+                  style={styles.blurActionItem}
+                  onPress={() => handleMenuAction("delete")}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="trash-outline"
+                    size={24}
+                    color={isDark ? "#EF9A9A" : "#E53935"}
+                  />
+                  <Text
+                    style={[
+                      styles.blurActionText,
+                      { color: isDark ? "#EF9A9A" : "#E53935" },
+                    ]}
                   >
-                    <Ionicons
-                      name="trash-outline"
-                      size={24}
-                      color={isDark ? "#EF9A9A" : "#E53935"}
-                    />
-                    <Text
-                      style={[
-                        styles.blurActionText,
-                        { color: isDark ? "#EF9A9A" : "#E53935" },
-                      ]}
-                    >
-                      Удалить
-                    </Text>
-                  </TouchableOpacity>
-                )}
+                    Удалить
+                  </Text>
+                </TouchableOpacity>
               </View>
             </View>
           )}
         </Pressable>
+      </Modal>
+
+      {/* Forward Message Modal */}
+      <Modal
+        visible={showForwardModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setShowForwardModal(false);
+          setForwardingMessage(null);
+        }}
+      >
+        <View
+          style={[
+            styles.forwardModalContainer,
+            { backgroundColor: colors.background },
+          ]}
+        >
+          <View
+            style={[
+              styles.forwardModalHeader,
+              { borderBottomColor: colors.border },
+            ]}
+          >
+            <TouchableOpacity
+              onPress={() => {
+                setShowForwardModal(false);
+                setForwardingMessage(null);
+              }}
+              style={styles.forwardModalClose}
+            >
+              <Ionicons name="close" size={24} color={colors.text} />
+            </TouchableOpacity>
+            <Text style={[styles.forwardModalTitle, { color: colors.text }]}>
+              {forwardingMessage
+                ? "Переслать сообщение"
+                : `Переслать (${selectedMessages.size})`}
+            </Text>
+            <View style={{ width: 40 }} />
+          </View>
+
+          {/* Search */}
+          <View
+            style={[
+              styles.forwardSearchContainer,
+              { backgroundColor: colors.inputBackground },
+            ]}
+          >
+            <Ionicons
+              name="search"
+              size={18}
+              color={colors.textSecondary}
+              style={{ marginRight: 8 }}
+            />
+            <TextInput
+              style={[styles.forwardSearchInput, { color: colors.text }]}
+              placeholder="Поиск чата..."
+              placeholderTextColor={colors.textSecondary}
+              value={forwardSearch}
+              onChangeText={setForwardSearch}
+              autoCorrect={false}
+            />
+          </View>
+
+          {/* Chat list */}
+          <FlatList
+            data={forwardChats.filter((c) =>
+              forwardSearch
+                ? c.name.toLowerCase().includes(forwardSearch.toLowerCase())
+                : true,
+            )}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item: chat }) => (
+              <TouchableOpacity
+                style={[
+                  styles.forwardChatItem,
+                  { borderBottomColor: colors.borderLight },
+                ]}
+                onPress={() => forwardMessagesToChat(chat.id)}
+                disabled={forwardSending}
+                activeOpacity={0.7}
+              >
+                {chat.avatar_url ? (
+                  <Image
+                    source={{ uri: chat.avatar_url }}
+                    style={styles.forwardChatAvatar}
+                  />
+                ) : (
+                  <View
+                    style={[
+                      styles.forwardChatAvatarPlaceholder,
+                      { backgroundColor: colors.primary },
+                    ]}
+                  >
+                    <Text style={styles.forwardChatAvatarText}>
+                      {chat.name.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.forwardChatInfo}>
+                  <Text
+                    style={[styles.forwardChatName, { color: colors.text }]}
+                    numberOfLines={1}
+                  >
+                    {chat.name}
+                  </Text>
+                  {chat.is_group && (
+                    <Text
+                      style={[
+                        styles.forwardChatType,
+                        { color: colors.textSecondary },
+                      ]}
+                    >
+                      Группа
+                    </Text>
+                  )}
+                </View>
+                <Ionicons name="arrow-redo" size={20} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <View style={styles.forwardEmptyContainer}>
+                <Text
+                  style={[
+                    styles.forwardEmptyText,
+                    { color: colors.textSecondary },
+                  ]}
+                >
+                  Чаты не найдены
+                </Text>
+              </View>
+            }
+          />
+        </View>
       </Modal>
 
       {/* Pin Options Modal */}
@@ -4918,6 +5597,111 @@ const styles = StyleSheet.create({
   },
   replyCancel: {
     padding: 4,
+  },
+  // Forwarded message label
+  forwardedLabel: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  forwardedText: {
+    fontSize: 12,
+    fontStyle: "italic",
+    fontWeight: "500",
+  },
+  // Select mode checkboxes
+  selectCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "rgba(128,128,128,0.5)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 8,
+    alignSelf: "center",
+  },
+  selectCheckboxSelected: {
+    borderWidth: 0,
+  },
+  // Forward modal
+  forwardModalContainer: {
+    flex: 1,
+    paddingTop: 50,
+  },
+  forwardModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  forwardModalClose: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  forwardModalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  forwardSearchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: 16,
+    marginVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  forwardSearchInput: {
+    flex: 1,
+    fontSize: 16,
+  },
+  forwardChatItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  forwardChatAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+  },
+  forwardChatAvatarPlaceholder: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  forwardChatAvatarText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  forwardChatInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  forwardChatName: {
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  forwardChatType: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  forwardEmptyContainer: {
+    alignItems: "center",
+    paddingVertical: 40,
+  },
+  forwardEmptyText: {
+    fontSize: 15,
   },
   // Replied message in bubble
   repliedMessageContainer: {

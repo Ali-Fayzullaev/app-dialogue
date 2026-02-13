@@ -68,6 +68,7 @@ export interface Database {
           joined_at: string;
           role: "admin" | "member";
           is_archived: boolean;
+          is_muted: boolean;
         };
         Insert: {
           id?: string;
@@ -76,6 +77,7 @@ export interface Database {
           joined_at?: string;
           role?: "admin" | "member";
           is_archived?: boolean;
+          is_muted?: boolean;
         };
         Update: {
           id?: string;
@@ -84,6 +86,7 @@ export interface Database {
           joined_at?: string;
           role?: "admin" | "member";
           is_archived?: boolean;
+          is_muted?: boolean;
         };
         Relationships: [];
       };
@@ -109,6 +112,11 @@ export interface Database {
           // Audio waveform data
           audio_waveform: number[] | null;
           audio_duration: number | null;
+          // Forward fields
+          forwarded_from_id: string | null;
+          forwarded_from_username: string | null;
+          // Soft delete
+          deleted_for_users: string[];
         };
         Insert: {
           id?: string;
@@ -128,6 +136,9 @@ export interface Database {
           file_size?: number | null;
           audio_waveform?: number[] | null;
           audio_duration?: number | null;
+          forwarded_from_id?: string | null;
+          forwarded_from_username?: string | null;
+          deleted_for_users?: string[];
         };
         Update: {
           id?: string;
@@ -147,6 +158,9 @@ export interface Database {
           file_size?: number | null;
           audio_waveform?: number[] | null;
           audio_duration?: number | null;
+          forwarded_from_id?: string | null;
+          forwarded_from_username?: string | null;
+          deleted_for_users?: string[];
         };
         Relationships: [];
       };

@@ -15,6 +15,7 @@ import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
 import { GroupedReaction, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { decode } from "base64-arraybuffer";
 import { Audio, ResizeMode, Video } from "expo-av";
@@ -26,7 +27,7 @@ import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActionSheetIOS,
   ActivityIndicator,
@@ -103,6 +104,57 @@ export default function ChatScreen() {
   const skipAutoScrollRef = useRef(false);
   const isNearBottomRef = useRef(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const firstVisibleMessageRef = useRef<string | null>(null);
+  const hasRestoredScrollRef = useRef(false);
+  const pendingScrollToRef = useRef<string | null>(null);
+  const messagesReadyRef = useRef(false);
+
+  const onViewableItemsChanged = useCallback(
+    ({
+      viewableItems,
+    }: {
+      viewableItems: Array<{ item: MessageWithSender }>;
+    }) => {
+      if (viewableItems.length > 0) {
+        // Inverted list: first viewable item = bottom-most message
+        const lastItem = viewableItems[viewableItems.length - 1];
+        firstVisibleMessageRef.current = lastItem.item.id;
+      }
+    },
+    [],
+  );
+
+  const viewabilityConfig = useRef({
+    viewAreaCoveragePercentThreshold: 10,
+  }).current;
+
+  // Мемоизированный reversed массив для inverted FlatList
+  const reversedMessages = React.useMemo(
+    () => [...messages].reverse(),
+    [messages],
+  );
+
+  // Надёжная прокрутка вниз (offset 0 в inverted списке)
+  const scrollToBottom = useCallback((animated = true) => {
+    flatListRef.current?.scrollToOffset({ offset: 0, animated });
+  }, []);
+
+  // Прокрутка к сообщению по ID (inverted-safe)
+  const scrollToMessageId = useCallback(
+    (messageId: string, animated = true) => {
+      const invertedIndex = reversedMessages.findIndex(
+        (m) => m.id === messageId,
+      );
+      if (invertedIndex !== -1) {
+        flatListRef.current?.scrollToIndex({
+          index: invertedIndex,
+          animated,
+          viewPosition: 0.5,
+        });
+      }
+    },
+    [reversedMessages],
+  );
   const router = useRouter();
   const channelRef = useRef<RealtimeChannel | null>(null);
   const blockChannelRef = useRef<RealtimeChannel | null>(null);
@@ -292,6 +344,13 @@ export default function ChatScreen() {
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
       }
+      // Сохраняем позицию скролла при выходе из чата
+      if (firstVisibleMessageRef.current) {
+        AsyncStorage.setItem(
+          `chat_scroll_${id}`,
+          firstVisibleMessageRef.current,
+        ).catch(() => {});
+      }
     };
   }, [id]);
 
@@ -304,11 +363,7 @@ export default function ChatScreen() {
         if (msgIndex !== -1) {
           setHighlightedMessageId(highlightMessage);
 
-          flatListRef.current?.scrollToIndex({
-            index: msgIndex,
-            animated: true,
-            viewPosition: 0.5,
-          });
+          scrollToMessageId(highlightMessage, true);
 
           // Анимация подсветки
           highlightAnimation.setValue(0);
@@ -637,6 +692,30 @@ export default function ChatScreen() {
         });
 
       setMessages(messagesWithSenders);
+      messagesReadyRef.current = true;
+
+      // Восстанавливаем позицию скролла
+      if (!hasRestoredScrollRef.current && !highlightMessage) {
+        hasRestoredScrollRef.current = true;
+        try {
+          const savedMessageId = await AsyncStorage.getItem(
+            `chat_scroll_${id}`,
+          );
+          if (savedMessageId) {
+            const savedIndex = messagesWithSenders.findIndex(
+              (m) => m.id === savedMessageId,
+            );
+            // Восстанавливаем только если пользователь был не у последних сообщений
+            if (
+              savedIndex !== -1 &&
+              savedIndex < messagesWithSenders.length - 5
+            ) {
+              // Отложенный скролл: сохраняем ID, скроллим после рендера
+              pendingScrollToRef.current = savedMessageId;
+            }
+          }
+        } catch {}
+      }
 
       // Загружаем реакции отдельно
       await fetchReactions(data?.map((m) => m.id) || []);
@@ -1100,11 +1179,7 @@ export default function ChatScreen() {
       // Установить highlighted сообщение
       setHighlightedMessageId(pinned.message.id);
 
-      flatListRef.current?.scrollToIndex({
-        index: msgIndex,
-        animated: true,
-        viewPosition: 0.5,
-      });
+      scrollToMessageId(pinned.message.id, true);
 
       // Анимация подсветки
       highlightAnimation.setValue(0);
@@ -1220,9 +1295,11 @@ export default function ChatScreen() {
             markMessagesAsRead();
           }
 
-          setTimeout(() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          }, 100);
+          if (isNearBottomRef.current && !skipAutoScrollRef.current) {
+            setTimeout(() => {
+              scrollToBottom(true);
+            }, 100);
+          }
         },
       )
       .on(
@@ -1966,11 +2043,7 @@ export default function ChatScreen() {
     if (msgIndex !== -1) {
       setHighlightedMessageId(targetMessage.id);
 
-      flatListRef.current?.scrollToIndex({
-        index: msgIndex,
-        animated: true,
-        viewPosition: 0.5,
-      });
+      scrollToMessageId(targetMessage.id, true);
 
       // Анимация подсветки
       highlightAnimation.setValue(0);
@@ -2772,10 +2845,14 @@ export default function ChatScreen() {
     });
   };
 
-  const shouldShowDateSeparator = (index: number) => {
-    if (index === 0) return true;
-    const currentDate = new Date(messages[index].created_at).toDateString();
-    const prevDate = new Date(messages[index - 1].created_at).toDateString();
+  const shouldShowDateSeparator = (item: MessageWithSender, index: number) => {
+    // inverted list: index 0 = последнее сообщение, следующий (index+1) = более старое
+    const nextIndex = index + 1;
+    if (nextIndex >= reversedMessages.length) return true; // самое старое сообщение
+    const currentDate = new Date(item.created_at).toDateString();
+    const prevDate = new Date(
+      reversedMessages[nextIndex].created_at,
+    ).toDateString();
     return currentDate !== prevDate;
   };
 
@@ -2820,7 +2897,7 @@ export default function ChatScreen() {
     index: number;
   }) => {
     const isMyMessage = item.sender_id === user?.id;
-    const showDate = shouldShowDateSeparator(index);
+    const showDate = shouldShowDateSeparator(item, index);
     const isHighlighted = highlightedMessageId === item.id;
 
     const isSelected = selectedMessages.has(item.id);
@@ -2968,14 +3045,25 @@ export default function ChatScreen() {
                   activeOpacity={0.7}
                   onPress={() => {
                     // Scroll to replied message
-                    const replyIndex = messages.findIndex(
-                      (m) => m.id === item.replied_message?.id,
-                    );
-                    if (replyIndex !== -1) {
-                      flatListRef.current?.scrollToIndex({
-                        index: replyIndex,
-                        animated: true,
-                      });
+                    if (item.replied_message?.id) {
+                      setHighlightedMessageId(item.replied_message.id);
+                      scrollToMessageId(item.replied_message.id, true);
+
+                      // Анимация подсветки
+                      highlightAnimation.setValue(0);
+                      Animated.sequence([
+                        Animated.timing(highlightAnimation, {
+                          toValue: 1,
+                          duration: 200,
+                          useNativeDriver: true,
+                        }),
+                        Animated.delay(600),
+                        Animated.timing(highlightAnimation, {
+                          toValue: 0,
+                          duration: 300,
+                          useNativeDriver: true,
+                        }),
+                      ]).start(() => setHighlightedMessageId(null));
                     }
                   }}
                 >
@@ -3799,34 +3887,52 @@ export default function ChatScreen() {
 
         <FlatList
           ref={flatListRef}
-          data={messages}
+          data={reversedMessages}
           renderItem={renderMessage}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.messagesList}
-          onContentSizeChange={() => {
-            if (!skipAutoScrollRef.current && isNearBottomRef.current) {
-              flatListRef.current?.scrollToEnd();
+          inverted
+          contentContainerStyle={styles.messagesListInverted}
+          onLayout={() => {
+            // Восстановление позиции после первого рендера
+            if (pendingScrollToRef.current && messages.length > 0) {
+              const targetId = pendingScrollToRef.current;
+              pendingScrollToRef.current = null;
+              const invertedIndex = reversedMessages.findIndex(
+                (m) => m.id === targetId,
+              );
+              if (invertedIndex !== -1) {
+                skipAutoScrollRef.current = true;
+                setTimeout(() => {
+                  flatListRef.current?.scrollToIndex({
+                    index: invertedIndex,
+                    animated: false,
+                    viewPosition: 0.5,
+                  });
+                  setTimeout(() => {
+                    skipAutoScrollRef.current = false;
+                  }, 300);
+                }, 50);
+              }
             }
           }}
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
           onScroll={(e) => {
-            const { contentOffset, layoutMeasurement, contentSize } =
-              e.nativeEvent;
-            const distanceFromBottom =
-              contentSize.height - layoutMeasurement.height - contentOffset.y;
-            const nearBottom = distanceFromBottom < 150;
+            const { contentOffset } = e.nativeEvent;
+            // inverted: offset 0 = низ (последние сообщения)
+            const nearBottom = contentOffset.y < 150;
             isNearBottomRef.current = nearBottom;
             setShowScrollButton(!nearBottom);
           }}
           scrollEventThrottle={100}
           onScrollToIndexFailed={(info) => {
-            const wait = new Promise((resolve) => setTimeout(resolve, 100));
-            wait.then(() => {
+            setTimeout(() => {
               flatListRef.current?.scrollToIndex({
                 index: info.index,
-                animated: true,
+                animated: false,
                 viewPosition: 0.5,
               });
-            });
+            }, 200);
           }}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
@@ -3856,9 +3962,7 @@ export default function ChatScreen() {
                 shadowColor: colors.shadowColor,
               },
             ]}
-            onPress={() => {
-              flatListRef.current?.scrollToEnd({ animated: true });
-            }}
+            onPress={() => scrollToBottom(true)}
             activeOpacity={0.8}
           >
             <Ionicons
@@ -5342,6 +5446,9 @@ const styles = StyleSheet.create({
     padding: 16,
     flexGrow: 1,
     justifyContent: "flex-end",
+  },
+  messagesListInverted: {
+    padding: 16,
   },
   scrollToBottomButton: {
     position: "absolute",

@@ -1,16 +1,21 @@
-import LinkPreviewCard from "@/components/link-preview-card";
+import { MessageBubble } from "@/components/chat";
 import {
   QuickReactionBar,
-  ReactionDisplay,
   ReactionUsersModal,
 } from "@/components/message-reactions";
-import VoiceMessageBubble, {
-  resetAudioMode,
-} from "@/components/voice-message-bubble";
+import { resetAudioMode } from "@/components/voice-message-bubble";
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
+import { loadDraft, removeDraft, saveDraft } from "@/lib/draft-service";
+import {
+  decryptMessage,
+  encryptMessage,
+  getOrDeriveSharedSecret,
+  hasKeys as hasE2EEKeys,
+  isEncrypted,
+} from "@/lib/encryption-service";
 import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
 import { GroupedReaction, Message, Profile } from "@/types/database";
@@ -267,6 +272,11 @@ export default function ChatScreen() {
   );
   const MAX_SELECT = 30;
 
+  // E2EE состояние
+  const [e2eeEnabled, setE2eeEnabled] = useState(false);
+  const sharedSecretRef = useRef<string | null>(null);
+  const otherPublicKeyRef = useRef<string | null>(null);
+
   // Анимация точек печатания
   useEffect(() => {
     if (typingUsers.length > 0) {
@@ -304,6 +314,17 @@ export default function ChatScreen() {
       };
     }
   }, [typingUsers.length]);
+
+  // Загрузка черновика при входе в чат
+  useEffect(() => {
+    if (id) {
+      loadDraft(id).then((draft) => {
+        if (draft) {
+          setNewMessage(draft.text);
+        }
+      });
+    }
+  }, [id]);
 
   useEffect(() => {
     fetchChatInfo();
@@ -350,6 +371,10 @@ export default function ChatScreen() {
           `chat_scroll_${id}`,
           firstVisibleMessageRef.current,
         ).catch(() => {});
+      }
+      // Сохраняем черновик при выходе
+      if (id) {
+        saveDraft(id, newMessage, replyingTo?.id).catch(() => {});
       }
     };
   }, [id]);
@@ -450,6 +475,22 @@ export default function ChatScreen() {
             setOtherUser(profiles[0]);
             const name = profiles.map((p) => p.username).join(", ");
             setChatName(name);
+
+            // E2EE: Загружаем публичный ключ собеседника
+            const otherPubKey = profiles[0].public_key;
+            otherPublicKeyRef.current = otherPubKey || null;
+            if (otherPubKey) {
+              try {
+                const hasMyKeys = await hasE2EEKeys();
+                if (hasMyKeys) {
+                  const shared = await getOrDeriveSharedSecret(id, otherPubKey);
+                  sharedSecretRef.current = shared;
+                  setE2eeEnabled(true);
+                }
+              } catch (err) {
+                console.error("[E2EE] Key derivation failed:", err);
+              }
+            }
           }
         }
       }
@@ -690,6 +731,22 @@ export default function ChatScreen() {
             reactions: [],
           };
         });
+
+      // E2EE: Дешифруем зашифрованные сообщения
+      if (sharedSecretRef.current) {
+        for (const msg of messagesWithSenders) {
+          if (msg.content && isEncrypted(msg.content)) {
+            try {
+              msg.content = await decryptMessage(
+                msg.content,
+                sharedSecretRef.current,
+              );
+            } catch {
+              // Оставляем как есть
+            }
+          }
+        }
+      }
 
       setMessages(messagesWithSenders);
       messagesReadyRef.current = true;
@@ -1282,6 +1339,22 @@ export default function ChatScreen() {
             reactions: [],
           };
 
+          // E2EE: Дешифруем если зашифровано
+          if (
+            messageWithSender.content &&
+            isEncrypted(messageWithSender.content) &&
+            sharedSecretRef.current
+          ) {
+            try {
+              messageWithSender.content = await decryptMessage(
+                messageWithSender.content,
+                sharedSecretRef.current,
+              );
+            } catch {
+              // Оставляем как есть
+            }
+          }
+
           setMessages((prev) => [...prev, messageWithSender]);
 
           // Если сообщение от другого — помечаем как доставленное и прочитанное
@@ -1525,11 +1598,24 @@ export default function ChatScreen() {
     setNewMessage("");
 
     try {
+      // E2EE: шифруем текст если доступно
+      let contentToSend = messageText;
+      if (e2eeEnabled && sharedSecretRef.current && !isGroup) {
+        try {
+          contentToSend = await encryptMessage(
+            messageText,
+            sharedSecretRef.current,
+          );
+        } catch (err) {
+          console.error("[E2EE] Encryption failed, sending plaintext:", err);
+        }
+      }
+
       if (editingMessage) {
         // Редактирование существующего сообщения
         const { error } = await supabase
           .from("messages")
-          .update({ content: messageText })
+          .update({ content: contentToSend })
           .eq("id", editingMessage.id);
 
         if (error) throw error;
@@ -1552,7 +1638,7 @@ export default function ChatScreen() {
         } = {
           chat_id: id,
           sender_id: user.id,
-          content: messageText,
+          content: contentToSend,
         };
 
         // Добавляем reply_to_id если отвечаем на сообщение
@@ -1565,6 +1651,11 @@ export default function ChatScreen() {
         if (error) throw error;
 
         setReplyingTo(null);
+      }
+
+      // Удаляем черновик после успешной отправки
+      if (id) {
+        removeDraft(id).catch(() => {});
       }
     } catch (error) {
       console.error("Error sending message:", error);
@@ -2889,6 +2980,52 @@ export default function ChatScreen() {
     };
     return icons[ext] || "document-attach";
   };
+
+  // Обработчики для MessageBubble
+  const handleBubbleLongPress = useCallback(
+    (message: any) => handleMessageLongPress(message),
+    [handleMessageLongPress],
+  );
+
+  const handleBubbleMediaPress = useCallback(
+    (url: string, type: "image" | "video") => setFullscreenMedia({ url, type }),
+    [],
+  );
+
+  const handleBubbleDocumentPress = useCallback(
+    (url: string, name: string) => setDocumentViewer({ url, name }),
+    [],
+  );
+
+  const handleBubbleReplyPress = useCallback(
+    (messageId: string) => {
+      setHighlightedMessageId(messageId);
+      scrollToMessageId(messageId, true);
+      highlightAnimation.setValue(0);
+      Animated.sequence([
+        Animated.timing(highlightAnimation, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.delay(600),
+        Animated.timing(highlightAnimation, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start(() => setHighlightedMessageId(null));
+    },
+    [scrollToMessageId],
+  );
+
+  const handleBubbleReactionLongPress = useCallback(
+    (reaction: GroupedReaction, allReactions: GroupedReaction[]) => {
+      showReactionUsersModal(reaction, allReactions);
+    },
+    [showReactionUsersModal],
+  );
+
   const renderMessage = ({
     item,
     index,
@@ -2898,9 +3035,6 @@ export default function ChatScreen() {
   }) => {
     const isMyMessage = item.sender_id === user?.id;
     const showDate = shouldShowDateSeparator(item, index);
-    const isHighlighted = highlightedMessageId === item.id;
-
-    const isSelected = selectedMessages.has(item.id);
 
     return (
       <>
@@ -2911,443 +3045,28 @@ export default function ChatScreen() {
             </Text>
           </View>
         )}
-        <Animated.View
-          style={[
-            isHighlighted && {
-              backgroundColor: highlightAnimation.interpolate({
-                inputRange: [0, 1],
-                outputRange: ["transparent", colors.primaryLight],
-              }),
-              transform: [
-                {
-                  scale: highlightAnimation.interpolate({
-                    inputRange: [0, 0.5, 1],
-                    outputRange: [1, 1.02, 1],
-                  }),
-                },
-              ],
-            },
-            isSelected && {
-              backgroundColor: isDark
-                ? "rgba(0,150,136,0.15)"
-                : "rgba(0,150,136,0.08)",
-            },
-          ]}
-        >
-          <TouchableOpacity
-            style={[
-              styles.messageContainer,
-              isMyMessage
-                ? styles.myMessageContainer
-                : styles.otherMessageContainer,
-            ]}
-            onLongPress={() => {
-              if (isSelectMode) {
-                toggleSelectMessage(item.id);
-              } else {
-                handleMessageLongPress(item);
-              }
-            }}
-            onPress={
-              isSelectMode ? () => toggleSelectMessage(item.id) : undefined
-            }
-            activeOpacity={isSelectMode ? 0.6 : 0.8}
-            delayLongPress={300}
-          >
-            {/* Чекбокс в режиме выбора */}
-            {isSelectMode && (
-              <View
-                style={[
-                  styles.selectCheckbox,
-                  isSelected && styles.selectCheckboxSelected,
-                  isSelected && { backgroundColor: colors.primary },
-                ]}
-              >
-                {isSelected && (
-                  <Ionicons name="checkmark" size={16} color="#fff" />
-                )}
-              </View>
-            )}
-            <View
-              style={[
-                styles.messageBubble,
-                isMyMessage
-                  ? [
-                      styles.myMessageBubble,
-                      { backgroundColor: colors.messageMine },
-                    ]
-                  : [
-                      styles.otherMessageBubble,
-                      { backgroundColor: colors.messageOther },
-                    ],
-                item.media_url && styles.mediaBubble,
-              ]}
-            >
-              {/* Sender name for group messages */}
-              {isGroup && !isMyMessage && item.sender && (
-                <Text
-                  style={[
-                    styles.senderName,
-                    { color: getAvatarColor(item.sender.id) },
-                  ]}
-                >
-                  {item.sender.username}
-                </Text>
-              )}
-
-              {/* Forwarded from label */}
-              {item.forwarded_from_username && (
-                <View style={styles.forwardedLabel}>
-                  <Ionicons
-                    name="arrow-redo"
-                    size={13}
-                    color={
-                      isMyMessage
-                        ? isDark
-                          ? "rgba(255,255,255,0.7)"
-                          : colors.primary
-                        : colors.primary
-                    }
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text
-                    style={[
-                      styles.forwardedText,
-                      {
-                        color: isMyMessage
-                          ? isDark
-                            ? "rgba(255,255,255,0.7)"
-                            : colors.primary
-                          : colors.primary,
-                      },
-                    ]}
-                    numberOfLines={1}
-                  >
-                    Переслано от {item.forwarded_from_username}
-                  </Text>
-                </View>
-              )}
-
-              {/* Replied message quote */}
-              {item.replied_message && (
-                <TouchableOpacity
-                  style={[
-                    styles.repliedMessageContainer,
-                    {
-                      backgroundColor: isMyMessage
-                        ? "rgba(255,255,255,0.15)"
-                        : isDark
-                          ? "rgba(255,255,255,0.08)"
-                          : "rgba(0,0,0,0.05)",
-                      borderLeftColor: colors.primary,
-                    },
-                  ]}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    // Scroll to replied message
-                    if (item.replied_message?.id) {
-                      setHighlightedMessageId(item.replied_message.id);
-                      scrollToMessageId(item.replied_message.id, true);
-
-                      // Анимация подсветки
-                      highlightAnimation.setValue(0);
-                      Animated.sequence([
-                        Animated.timing(highlightAnimation, {
-                          toValue: 1,
-                          duration: 200,
-                          useNativeDriver: true,
-                        }),
-                        Animated.delay(600),
-                        Animated.timing(highlightAnimation, {
-                          toValue: 0,
-                          duration: 300,
-                          useNativeDriver: true,
-                        }),
-                      ]).start(() => setHighlightedMessageId(null));
-                    }
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.repliedMessageSender,
-                      { color: colors.primary },
-                    ]}
-                  >
-                    {item.replied_message.sender?.username || "Пользователь"}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.repliedMessageText,
-                      {
-                        color: isMyMessage
-                          ? "rgba(255,255,255,0.8)"
-                          : colors.textSecondary,
-                      },
-                    ]}
-                    numberOfLines={2}
-                  >
-                    {item.replied_message.content ||
-                      (item.replied_message.media_type === "image"
-                        ? "Фото"
-                        : item.replied_message.media_type === "video"
-                          ? "Видео"
-                          : item.replied_message.media_type === "location"
-                            ? "Геолокация"
-                            : item.replied_message.media_type === "file"
-                              ? "Документ"
-                              : "Аудио")}
-                  </Text>
-                </TouchableOpacity>
-              )}
-
-              {/* Media content */}
-              {item.media_url && item.media_type === "image" && (
-                <TouchableOpacity
-                  activeOpacity={0.9}
-                  onPress={() =>
-                    setFullscreenMedia({ url: item.media_url!, type: "image" })
-                  }
-                >
-                  <Image
-                    source={{ uri: item.media_url }}
-                    style={styles.mediaImage}
-                    resizeMode="cover"
-                  />
-                </TouchableOpacity>
-              )}
-              {item.media_url &&
-                item.media_type === "video" &&
-                Platform.OS !== "web" && (
-                  <TouchableOpacity
-                    activeOpacity={0.9}
-                    onPress={() =>
-                      setFullscreenMedia({
-                        url: item.media_url!,
-                        type: "video",
-                      })
-                    }
-                  >
-                    <Video
-                      source={{ uri: item.media_url }}
-                      style={styles.mediaVideo}
-                      useNativeControls
-                      resizeMode={ResizeMode.CONTAIN}
-                      isLooping={false}
-                    />
-                  </TouchableOpacity>
-                )}
-              {item.media_url &&
-                item.media_type === "video" &&
-                Platform.OS === "web" && (
-                  <View style={styles.mediaVideo}>
-                    <Text style={{ color: colors.textMuted }}>
-                      Видео (откройте в приложении)
-                    </Text>
-                  </View>
-                )}
-              {item.media_url && item.media_type === "audio" && (
-                <VoiceMessageBubble
-                  messageId={item.id}
-                  audioUrl={item.media_url}
-                  isMyMessage={isMyMessage}
-                  waveform={item.audio_waveform}
-                  duration={item.audio_duration}
-                  playingAudioId={playingAudioId}
-                  onPlayStateChange={setPlayingAudioId}
-                  soundRef={soundRef}
-                />
-              )}
-
-              {/* Location message */}
-              {item.media_type === "location" &&
-                item.latitude &&
-                item.longitude && (
-                  <TouchableOpacity
-                    style={styles.locationContainer}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      // Используем Google Maps URL - работает везде включая Expo Go
-                      const url = `https://www.google.com/maps/search/?api=1&query=${item.latitude},${item.longitude}`;
-                      if (Platform.OS === "web") {
-                        window.open(url, "_blank");
-                      } else {
-                        Linking.openURL(url);
-                      }
-                    }}
-                  >
-                    <Image
-                      source={{
-                        uri: `https://static-maps.yandex.ru/1.x/?ll=${item.longitude},${item.latitude}&z=14&size=280,150&l=map&pt=${item.longitude},${item.latitude},pm2rdl`,
-                      }}
-                      style={styles.locationMap}
-                      resizeMode="cover"
-                    />
-                    <View style={styles.locationInfo}>
-                      <View style={styles.locationHeader}>
-                        <Ionicons
-                          name="location"
-                          size={18}
-                          color={colors.primary}
-                        />
-                        <Text
-                          style={[styles.locationTitle, { color: colors.text }]}
-                          numberOfLines={1}
-                        >
-                          {item.location_name || "Местоположение"}
-                        </Text>
-                      </View>
-                      <Text
-                        style={[
-                          styles.locationCoords,
-                          { color: colors.textSecondary },
-                        ]}
-                      >
-                        {item.latitude.toFixed(6)}, {item.longitude.toFixed(6)}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                )}
-
-              {/* File/Document message */}
-              {item.media_type === "file" && item.media_url && (
-                <TouchableOpacity
-                  style={[
-                    styles.fileContainer,
-                    {
-                      backgroundColor: isMyMessage
-                        ? "rgba(255,255,255,0.15)"
-                        : isDark
-                          ? "rgba(255,255,255,0.08)"
-                          : "rgba(0,0,0,0.05)",
-                    },
-                  ]}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    setDocumentViewer({
-                      url: item.media_url!,
-                      name: item.file_name || "Документ",
-                    });
-                  }}
-                  onLongPress={() => {
-                    // Длительное нажатие - открыть в браузере / скачать
-                    if (Platform.OS === "web") {
-                      window.open(item.media_url!, "_blank");
-                    } else {
-                      Linking.openURL(item.media_url!);
-                    }
-                  }}
-                >
-                  <View
-                    style={[
-                      styles.fileIcon,
-                      { backgroundColor: colors.primary },
-                    ]}
-                  >
-                    <Ionicons
-                      name={getFileIcon(item.file_name || "")}
-                      size={24}
-                      color="#fff"
-                    />
-                  </View>
-                  <View style={styles.fileInfo}>
-                    <Text
-                      style={[
-                        styles.fileName,
-                        {
-                          color: isMyMessage
-                            ? isDark
-                              ? "#fff"
-                              : colors.text
-                            : colors.text,
-                        },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {item.file_name || "Документ"}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.fileSize,
-                        {
-                          color: isMyMessage
-                            ? isDark
-                              ? "rgba(255,255,255,0.7)"
-                              : colors.textSecondary
-                            : colors.textSecondary,
-                        },
-                      ]}
-                    >
-                      {formatFileSize(item.file_size || 0)}
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name="download-outline"
-                    size={22}
-                    color={
-                      isMyMessage
-                        ? isDark
-                          ? "rgba(255,255,255,0.8)"
-                          : colors.primary
-                        : colors.primary
-                    }
-                  />
-                </TouchableOpacity>
-              )}
-
-              {/* Text content */}
-              {item.content
-                ? highlightSearchText(item.content, isMyMessage)
-                : null}
-
-              {/* Link Preview */}
-              {item.content && /(https?:\/\/[^\s]+)/i.test(item.content) && (
-                <LinkPreviewCard
-                  text={item.content}
-                  isMyMessage={isMyMessage}
-                  colors={colors}
-                  isDark={isDark}
-                />
-              )}
-
-              <Text style={[styles.messageTime, { color: colors.messageTime }]}>
-                {formatMessageTime(item.created_at)}
-                {isMyMessage && (
-                  <Text style={{ marginLeft: 4 }}>
-                    {" "}
-                    <Ionicons
-                      name={
-                        item.is_read
-                          ? "checkmark-done"
-                          : item.is_delivered
-                            ? "checkmark-done"
-                            : "checkmark"
-                      }
-                      size={14}
-                      color={item.is_read ? "#4FC3F7" : colors.messageTime}
-                    />
-                  </Text>
-                )}
-              </Text>
-              {item.updated_at && item.updated_at !== item.created_at && (
-                <Text style={styles.editedLabel}>изменено</Text>
-              )}
-            </View>
-
-            {/* Reactions display */}
-            {item.reactions && item.reactions.length > 0 && (
-              <ReactionDisplay
-                reactions={item.reactions}
-                onReactionPress={(emoji: string) =>
-                  toggleReaction(item.id, emoji)
-                }
-                onReactionLongPress={(reaction: GroupedReaction) =>
-                  showReactionUsersModal(reaction, item.reactions || [])
-                }
-                isMyMessage={isMyMessage}
-              />
-            )}
-          </TouchableOpacity>
-        </Animated.View>
+        <MessageBubble
+          item={item}
+          isMyMessage={isMyMessage}
+          isGroup={isGroup}
+          isSelected={selectedMessages.has(item.id)}
+          isSelectMode={isSelectMode}
+          isHighlighted={highlightedMessageId === item.id}
+          isDark={isDark}
+          colors={colors}
+          searchQuery={searchQuery}
+          playingAudioId={playingAudioId}
+          soundRef={soundRef}
+          highlightAnimation={highlightAnimation}
+          onLongPress={handleBubbleLongPress}
+          onToggleSelect={toggleSelectMessage}
+          onMediaPress={handleBubbleMediaPress}
+          onDocumentPress={handleBubbleDocumentPress}
+          onReplyPress={handleBubbleReplyPress}
+          onToggleReaction={toggleReaction}
+          onReactionLongPress={handleBubbleReactionLongPress}
+          onPlayStateChange={setPlayingAudioId}
+        />
       </>
     );
   };
@@ -3500,7 +3219,17 @@ export default function ChatScreen() {
             </TouchableOpacity>
 
             <View style={styles.headerInfo}>
-              <Text style={styles.headerName}>{chatName}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Text style={styles.headerName}>{chatName}</Text>
+                {e2eeEnabled && !isGroup && (
+                  <Ionicons
+                    name="lock-closed"
+                    size={12}
+                    color="#4CAF50"
+                    style={{ marginLeft: 4 }}
+                  />
+                )}
+              </View>
               <Text
                 style={[
                   styles.headerStatus,

@@ -2,6 +2,10 @@ import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import { sendLocalNotification } from "@/hooks/use-push-notifications";
+import {
+  generateKeyPair,
+  hasKeys as hasE2EEKeys
+} from "@/lib/encryption-service";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { decode } from "base64-arraybuffer";
@@ -12,15 +16,15 @@ import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 // Safe haptic function for web compatibility
@@ -41,6 +45,13 @@ export default function ProfileScreen() {
   const { colors } = useTheme();
   const router = useRouter();
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [e2eeReady, setE2eeReady] = useState(false);
+  const [generatingKeys, setGeneratingKeys] = useState(false);
+
+  // Проверяем наличие E2EE ключей при монтировании
+  React.useEffect(() => {
+    hasE2EEKeys().then(setE2eeReady);
+  }, []);
 
   const handlePickAvatar = async () => {
     if (Platform.OS === "web") {
@@ -354,17 +365,81 @@ export default function ProfileScreen() {
         <TouchableOpacity
           style={styles.menuItem}
           activeOpacity={0.6}
-          onPress={safeHaptic}
+          onPress={async () => {
+            safeHaptic();
+            if (e2eeReady) {
+              Alert.alert(
+                "Шифрование активно",
+                "Ваши E2EE ключи уже сгенерированы. Приватные чаты зашифрованы.",
+              );
+              return;
+            }
+            setGeneratingKeys(true);
+            try {
+              const publicKey = await generateKeyPair();
+              // Сохраняем публичный ключ в профиль
+              if (user) {
+                await supabase
+                  .from("profiles")
+                  .update({ public_key: publicKey })
+                  .eq("id", user.id);
+              }
+              setE2eeReady(true);
+              safeNotificationHaptic(Haptics.NotificationFeedbackType.Success);
+              Alert.alert(
+                "Шифрование включено",
+                "Ключи E2EE сгенерированы. Приватные чаты теперь защищены сквозным шифрованием.",
+              );
+            } catch (error) {
+              console.error("E2EE key generation failed:", error);
+              Alert.alert(
+                "Ошибка",
+                "Не удалось сгенерировать ключи шифрования",
+              );
+            } finally {
+              setGeneratingKeys(false);
+            }
+          }}
         >
           <View style={styles.menuItemLeft}>
-            <View style={[styles.menuIcon, { backgroundColor: "#4ECDC420" }]}>
-              <Ionicons name="lock-closed-outline" size={18} color="#4ECDC4" />
+            <View
+              style={[
+                styles.menuIcon,
+                { backgroundColor: e2eeReady ? "#4CAF5020" : "#4ECDC420" },
+              ]}
+            >
+              <Ionicons
+                name={e2eeReady ? "lock-closed" : "lock-open-outline"}
+                size={18}
+                color={e2eeReady ? "#4CAF50" : "#4ECDC4"}
+              />
             </View>
-            <Text style={[styles.menuItemText, { color: colors.textPrimary }]}>
-              Конфиденциальность
-            </Text>
+            <View>
+              <Text
+                style={[styles.menuItemText, { color: colors.textPrimary }]}
+              >
+                Сквозное шифрование (E2EE)
+              </Text>
+              <Text
+                style={{
+                  fontSize: 11,
+                  color: e2eeReady ? "#4CAF50" : colors.textMuted,
+                  marginTop: 1,
+                }}
+              >
+                {generatingKeys
+                  ? "Генерация ключей..."
+                  : e2eeReady
+                    ? "Активно"
+                    : "Нажмите для активации"}
+              </Text>
+            </View>
           </View>
-          <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+          <Ionicons
+            name={e2eeReady ? "checkmark-circle" : "chevron-forward"}
+            size={20}
+            color={e2eeReady ? "#4CAF50" : colors.textMuted}
+          />
         </TouchableOpacity>
 
         <View style={[styles.divider, { backgroundColor: colors.border }]} />

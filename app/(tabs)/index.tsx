@@ -5,6 +5,7 @@ import { useTheme } from "@/contexts/theme-context";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { isUserReallyOnline } from "@/hooks/use-presence";
 import { CachedChat, cacheService } from "@/lib/cache-service";
+import { Draft, getAllDrafts } from "@/lib/draft-service";
 import { supabase } from "@/lib/supabase";
 import { Chat, ChatFolderWithCount, Message, Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
@@ -76,6 +77,14 @@ export default function ChatsScreen() {
   const { colors } = useTheme();
   const router = useRouter();
   const { isOffline } = useNetworkStatus();
+  const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
+
+  // Загружаем черновики при каждом фокусе экрана
+  useFocusEffect(
+    useCallback(() => {
+      getAllDrafts().then(setDrafts);
+    }, []),
+  );
 
   const toggleFabMenu = () => {
     if (Platform.OS !== "web") {
@@ -802,6 +811,7 @@ export default function ChatsScreen() {
   const renderChat = ({ item }: { item: ChatItem }) => {
     const otherMember = getOtherMember(item);
     const isGroup = item.is_group;
+    const draft = drafts.get(item.id);
     const avatarColor = isGroup
       ? "#FF9500"
       : otherMember
@@ -1070,42 +1080,61 @@ export default function ChatsScreen() {
                   numberOfLines={1}
                 >
                   {/* Галочки статуса доставки для своих сообщений */}
-                  {item.last_message?.sender_id === user?.id &&
-                    item.last_message && (
-                      <>
-                        <Ionicons
-                          name={
-                            item.last_message.is_read
-                              ? "checkmark-done"
-                              : (item.last_message as any).is_delivered
-                                ? "checkmark-done"
-                                : "checkmark"
-                          }
-                          size={14}
-                          color={
-                            item.last_message.is_read
-                              ? "#4FC3F7"
-                              : colors.textSecondary
-                          }
-                        />{" "}
-                      </>
-                    )}
-                  {isGroup && item.last_message
-                    ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `
-                    : ""}
-                  {item.last_message?.media_type
-                    ? item.last_message.media_type === "image"
-                      ? "Фото"
-                      : item.last_message.media_type === "video"
-                        ? "Видео"
-                        : item.last_message.media_type === "audio"
-                          ? "Аудио"
-                          : item.last_message.media_type === "location"
-                            ? "Геолокация"
-                            : item.last_message.media_type === "file"
-                              ? "Документ"
-                              : item.last_message?.content || "Нет сообщений"
-                    : item.last_message?.content || "Нет сообщений"}
+                  {draft ? (
+                    <>
+                      <Text
+                        style={{ color: colors.primary, fontWeight: "600" }}
+                      >
+                        {"Черновик: "}
+                      </Text>
+                      <Text
+                        style={{ color: colors.textSecondary }}
+                        numberOfLines={1}
+                      >
+                        {draft.text}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      {item.last_message?.sender_id === user?.id &&
+                        item.last_message && (
+                          <>
+                            <Ionicons
+                              name={
+                                item.last_message.is_read
+                                  ? "checkmark-done"
+                                  : (item.last_message as any).is_delivered
+                                    ? "checkmark-done"
+                                    : "checkmark"
+                              }
+                              size={14}
+                              color={
+                                item.last_message.is_read
+                                  ? "#4FC3F7"
+                                  : colors.textSecondary
+                              }
+                            />{" "}
+                          </>
+                        )}
+                      {isGroup && item.last_message
+                        ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `
+                        : ""}
+                      {item.last_message?.media_type
+                        ? item.last_message.media_type === "image"
+                          ? "Фото"
+                          : item.last_message.media_type === "video"
+                            ? "Видео"
+                            : item.last_message.media_type === "audio"
+                              ? "Аудио"
+                              : item.last_message.media_type === "location"
+                                ? "Геолокация"
+                                : item.last_message.media_type === "file"
+                                  ? "Документ"
+                                  : item.last_message?.content ||
+                                    "Нет сообщений"
+                        : item.last_message?.content || "Нет сообщений"}
+                    </>
+                  )}
                 </Text>
               )}
               {item.unread_count > 0 && (

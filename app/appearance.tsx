@@ -320,7 +320,7 @@ export default function AppearanceScreen() {
             <Text style={styles.previewTitle}>Как будет выглядеть чат:</Text>
             <View style={styles.previewChat}>
               <View style={styles.previewBubbleOther}>
-                <Text style={styles.previewText}>Привет! Как дела? 👋</Text>
+                <Text style={styles.previewText}>Привет! Как дела?</Text>
                 <Text style={styles.previewTime}>10:30</Text>
               </View>
               <View style={styles.previewBubbleMine}>

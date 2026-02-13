@@ -1,3 +1,4 @@
+import LinkPreviewCard from "@/components/link-preview-card";
 import {
   QuickReactionBar,
   ReactionDisplay,
@@ -1372,19 +1373,26 @@ export default function ChatScreen() {
     if (!id || !user) return;
 
     try {
-      // Помечаем все непрочитанные сообщения от других пользователей как прочитанные и доставленные
       const { error } = await supabase
         .from("messages")
         .update({ is_read: true, is_delivered: true })
-        .eq("chat_id", id)
+        .eq("chat_id", id as string)
         .neq("sender_id", user.id)
         .eq("is_read", false);
 
       if (error) {
-        console.error("Error marking messages as read:", error);
+        // Если is_delivered не существует — пробуем без неё
+        if (error.message?.includes("is_delivered")) {
+          await supabase
+            .from("messages")
+            .update({ is_read: true })
+            .eq("chat_id", id as string)
+            .neq("sender_id", user.id)
+            .eq("is_read", false);
+        }
       }
-    } catch (error) {
-      console.error("Error marking messages as read:", error);
+    } catch (_) {
+      // Молча игнорируем
     }
   };
 
@@ -1396,15 +1404,15 @@ export default function ChatScreen() {
       const { error } = await supabase
         .from("messages")
         .update({ is_delivered: true })
-        .eq("chat_id", id)
+        .eq("chat_id", id as string)
         .neq("sender_id", user.id)
         .eq("is_delivered", false);
 
       if (error) {
-        console.error("Error marking messages as delivered:", error);
+        // is_delivered колонка может не существовать — молча игнорируем
       }
-    } catch (error) {
-      console.error("Error marking messages as delivered:", error);
+    } catch (_) {
+      // Молча игнорируем
     }
   };
 
@@ -3202,6 +3210,17 @@ export default function ChatScreen() {
               {item.content
                 ? highlightSearchText(item.content, isMyMessage)
                 : null}
+
+              {/* Link Preview */}
+              {item.content && /(https?:\/\/[^\s]+)/i.test(item.content) && (
+                <LinkPreviewCard
+                  text={item.content}
+                  isMyMessage={isMyMessage}
+                  colors={colors}
+                  isDark={isDark}
+                />
+              )}
+
               <Text style={[styles.messageTime, { color: colors.messageTime }]}>
                 {formatMessageTime(item.created_at)}
                 {isMyMessage && (
@@ -3265,7 +3284,7 @@ export default function ChatScreen() {
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: colors.backgroundChat }]}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
     >
       {/* Custom Header */}
       {isSelectMode ? (
@@ -3576,6 +3595,7 @@ export default function ChatScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="search"
+              keyboardAppearance={isDark ? "dark" : "light"}
             />
             {searchQuery.length > 0 && (
               <TouchableOpacity
@@ -3636,6 +3656,8 @@ export default function ChatScreen() {
             style={[
               styles.pinnedBar,
               {
+                backgroundColor: colors.card,
+                borderBottomColor: colors.border,
                 opacity: pinnedAnimation,
                 transform: [
                   {
@@ -3662,7 +3684,12 @@ export default function ChatScreen() {
                     color={colors.primary}
                   />
                 </TouchableOpacity>
-                <Text style={styles.pinnedCounter}>
+                <Text
+                  style={[
+                    styles.pinnedCounter,
+                    { color: colors.textSecondary },
+                  ]}
+                >
                   {currentPinnedIndex + 1}/{pinnedMessages.length}
                 </Text>
                 <TouchableOpacity
@@ -3702,22 +3729,25 @@ export default function ChatScreen() {
                 />
               </View>
               <View style={styles.pinnedTextContainer}>
-                <Text style={styles.pinnedLabel}>
+                <Text style={[styles.pinnedLabel, { color: colors.primary }]}>
                   {pinnedMessages[currentPinnedIndex]?.isPersonal
                     ? "Закреплено для вас"
                     : "Закреплённое сообщение"}
                 </Text>
-                <Text style={styles.pinnedMessageText} numberOfLines={1}>
+                <Text
+                  style={[styles.pinnedMessageText, { color: colors.text }]}
+                  numberOfLines={1}
+                >
                   {pinnedMessages[currentPinnedIndex]?.message.content ||
                     (pinnedMessages[currentPinnedIndex]?.message.media_type ===
                     "image"
-                      ? "📷 Фото"
+                      ? "Фото"
                       : pinnedMessages[currentPinnedIndex]?.message
                             .media_type === "video"
-                        ? "🎬 Видео"
+                        ? "Видео"
                         : pinnedMessages[currentPinnedIndex]?.message
                               .media_type === "audio"
-                          ? "🎵 Аудио"
+                          ? "Аудио"
                           : "Сообщение")}
                 </Text>
               </View>
@@ -4080,9 +4110,8 @@ export default function ChatScreen() {
                         style={[
                           styles.liveWaveBar,
                           {
-                            height: Math.max(3, Math.min(24, height)),
-                            backgroundColor: colors.primary,
-                            opacity: 0.4 + liveMetering * 0.6,
+                            height: Math.max(3, Math.min(28, height)),
+                            backgroundColor: "#ff3b30",
                           },
                         ]}
                       />
@@ -4156,6 +4185,7 @@ export default function ChatScreen() {
                   placeholderTextColor={colors.textMuted}
                   multiline
                   maxLength={1000}
+                  keyboardAppearance={isDark ? "dark" : "light"}
                 />
               </View>
 
@@ -4749,6 +4779,7 @@ export default function ChatScreen() {
               value={forwardSearch}
               onChangeText={setForwardSearch}
               autoCorrect={false}
+              keyboardAppearance={isDark ? "dark" : "light"}
             />
           </View>
 
@@ -4836,6 +4867,7 @@ export default function ChatScreen() {
             style={[
               styles.pinOptionsContainer,
               {
+                backgroundColor: colors.card,
                 transform: [
                   {
                     scale: pinOptionsAnimation.interpolate({
@@ -4850,15 +4882,29 @@ export default function ChatScreen() {
           >
             <View style={styles.pinOptionsHeader}>
               <Ionicons name="bookmark" size={28} color={colors.primary} />
-              <Text style={styles.pinOptionsTitle}>Закрепить сообщение</Text>
+              <Text style={[styles.pinOptionsTitle, { color: colors.text }]}>
+                Закрепить сообщение
+              </Text>
             </View>
 
-            <Text style={styles.pinOptionsDescription}>
+            <Text
+              style={[
+                styles.pinOptionsDescription,
+                { color: colors.textSecondary },
+              ]}
+            >
               Выберите, кто увидит закреплённое сообщение
             </Text>
 
             <TouchableOpacity
-              style={styles.pinOptionButton}
+              style={[
+                styles.pinOptionButton,
+                {
+                  backgroundColor: isDark
+                    ? "rgba(255,255,255,0.06)"
+                    : "rgba(0,0,0,0.04)",
+                },
+              ]}
               onPress={() => handlePinOption(false)}
               activeOpacity={0.7}
             >
@@ -4871,15 +4917,29 @@ export default function ChatScreen() {
                 <Ionicons name="people" size={22} color="#fff" />
               </View>
               <View style={styles.pinOptionTextContainer}>
-                <Text style={styles.pinOptionTitle}>Для всех</Text>
-                <Text style={styles.pinOptionSubtitle}>
+                <Text style={[styles.pinOptionTitle, { color: colors.text }]}>
+                  Для всех
+                </Text>
+                <Text
+                  style={[
+                    styles.pinOptionSubtitle,
+                    { color: colors.textSecondary },
+                  ]}
+                >
                   Все участники увидят это закреплённое сообщение
                 </Text>
               </View>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.pinOptionButton}
+              style={[
+                styles.pinOptionButton,
+                {
+                  backgroundColor: isDark
+                    ? "rgba(255,255,255,0.06)"
+                    : "rgba(0,0,0,0.04)",
+                },
+              ]}
               onPress={() => handlePinOption(true)}
               activeOpacity={0.7}
             >
@@ -4889,8 +4949,15 @@ export default function ChatScreen() {
                 <Ionicons name="person" size={22} color="#fff" />
               </View>
               <View style={styles.pinOptionTextContainer}>
-                <Text style={styles.pinOptionTitle}>Только для меня</Text>
-                <Text style={styles.pinOptionSubtitle}>
+                <Text style={[styles.pinOptionTitle, { color: colors.text }]}>
+                  Только для меня
+                </Text>
+                <Text
+                  style={[
+                    styles.pinOptionSubtitle,
+                    { color: colors.textSecondary },
+                  ]}
+                >
                   Только вы увидите это закреплённое сообщение
                 </Text>
               </View>
@@ -4901,7 +4968,11 @@ export default function ChatScreen() {
               onPress={hidePinOptionsMenu}
               activeOpacity={0.7}
             >
-              <Text style={styles.pinOptionCancelText}>Отмена</Text>
+              <Text
+                style={[styles.pinOptionCancelText, { color: colors.primary }]}
+              >
+                Отмена
+              </Text>
             </TouchableOpacity>
           </Animated.View>
         </Pressable>
@@ -5371,7 +5442,7 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: "row",
     padding: 8,
-    paddingBottom: 24,
+    paddingBottom: Platform.OS === "ios" ? 8 : 8,
     alignItems: "flex-end",
     borderTopWidth: 1,
   },
@@ -5999,13 +6070,14 @@ const styles = StyleSheet.create({
   liveWaveform: {
     flexDirection: "row",
     alignItems: "center",
-    height: 28,
+    height: 32,
     gap: 2,
     marginBottom: 4,
   },
   liveWaveBar: {
     width: 3,
     borderRadius: 1.5,
+    minHeight: 3,
   },
   sendRecordingButton: {
     width: 44,
@@ -6240,6 +6312,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
+    backgroundColor: "rgba(0,122,255,0.12)",
     justifyContent: "center",
     alignItems: "center",
   },

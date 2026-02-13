@@ -1,5 +1,6 @@
 import { colors, getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { groupService } from "@/lib/group-service";
 import { supabase } from "@/lib/supabase";
 import { ChatMemberWithProfile, Profile } from "@/types/database";
@@ -11,20 +12,20 @@ import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
-    ActionSheetIOS,
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Image,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActionSheetIOS,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 const safeHaptic = (
@@ -38,6 +39,7 @@ const safeHaptic = (
 export default function GroupSettingsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
+  const { isDark } = useTheme();
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -527,6 +529,7 @@ export default function GroupSettingsScreen() {
                 placeholder="Название группы"
                 placeholderTextColor={colors.textMuted}
                 maxLength={50}
+                keyboardAppearance={isDark ? "dark" : "light"}
               />
               <TextInput
                 style={styles.descriptionInput}
@@ -536,6 +539,7 @@ export default function GroupSettingsScreen() {
                 placeholderTextColor={colors.textMuted}
                 multiline
                 maxLength={200}
+                keyboardAppearance={isDark ? "dark" : "light"}
               />
             </>
           ) : (
@@ -676,6 +680,7 @@ export default function GroupSettingsScreen() {
               placeholderTextColor={colors.textMuted}
               value={searchQuery}
               onChangeText={setSearchQuery}
+              keyboardAppearance={isDark ? "dark" : "light"}
             />
           </View>
 

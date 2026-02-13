@@ -1,5 +1,6 @@
 import { colors } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
@@ -24,6 +25,7 @@ export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
 
   const { signIn, signUp } = useAuth();
+  const { isDark } = useTheme();
   const router = useRouter();
 
   const handleSubmit = async () => {
@@ -86,6 +88,7 @@ export default function AuthScreen() {
                 value={username}
                 onChangeText={setUsername}
                 autoCapitalize="none"
+                keyboardAppearance={isDark ? "dark" : "light"}
               />
             </View>
           )}
@@ -100,6 +103,7 @@ export default function AuthScreen() {
               onChangeText={setEmail}
               keyboardType="email-address"
               autoCapitalize="none"
+              keyboardAppearance={isDark ? "dark" : "light"}
             />
           </View>
 
@@ -112,6 +116,7 @@ export default function AuthScreen() {
               value={password}
               onChangeText={setPassword}
               secureTextEntry
+              keyboardAppearance={isDark ? "dark" : "light"}
             />
           </View>
 

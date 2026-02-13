@@ -12,15 +12,15 @@ import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 
 // Safe haptic function for web compatibility
@@ -327,7 +327,7 @@ export default function ProfileScreen() {
               return;
             }
             await sendLocalNotification(
-              "Тестовое уведомление 🎉",
+              "Тестовое уведомление",
               "Push-уведомления работают!",
               { test: true },
             );

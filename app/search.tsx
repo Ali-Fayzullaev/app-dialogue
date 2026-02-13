@@ -52,7 +52,7 @@ const safeHaptic = (
 
 export default function SearchScreen() {
   const { user } = useAuth();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -376,6 +376,7 @@ export default function SearchScreen() {
             autoCorrect={false}
             autoFocus
             returnKeyType="search"
+            keyboardAppearance={isDark ? "dark" : "light"}
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity

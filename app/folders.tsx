@@ -17,7 +17,7 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    View
+    View,
 } from "react-native";
 
 // Доступные иконки для папок
@@ -70,7 +70,7 @@ const FOLDER_COLORS = [
 
 export default function FoldersScreen() {
   const { user } = useAuth();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const router = useRouter();
   const [folders, setFolders] = useState<ChatFolderWithCount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -374,6 +374,7 @@ export default function FoldersScreen() {
                 placeholder="Введите название"
                 placeholderTextColor={colors.textMuted}
                 maxLength={50}
+                keyboardAppearance={isDark ? "dark" : "light"}
               />
             </View>
 

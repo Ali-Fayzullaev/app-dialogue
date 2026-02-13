@@ -1,5 +1,6 @@
 import { colors, getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { supabase } from "@/lib/supabase";
 import { Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
@@ -24,6 +25,7 @@ export default function NewChatScreen() {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const { user } = useAuth();
+  const { isDark } = useTheme();
   const router = useRouter();
 
   useEffect(() => {
@@ -179,6 +181,7 @@ export default function NewChatScreen() {
             onChangeText={setSearchQuery}
             autoCapitalize="none"
             autoFocus
+            keyboardAppearance={isDark ? "dark" : "light"}
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity

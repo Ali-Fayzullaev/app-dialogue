@@ -1,5 +1,6 @@
 import { colors, getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "@/contexts/theme-context";
 import { groupService } from "@/lib/group-service";
 import { supabase } from "@/lib/supabase";
 import { Profile } from "@/types/database";
@@ -11,18 +12,18 @@ import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Image,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 const safeHaptic = (
@@ -35,6 +36,7 @@ const safeHaptic = (
 
 export default function CreateGroupScreen() {
   const { user } = useAuth();
+  const { isDark } = useTheme();
   const router = useRouter();
 
   const [step, setStep] = useState<"members" | "info">("members");
@@ -339,6 +341,7 @@ export default function CreateGroupScreen() {
               placeholderTextColor={colors.textMuted}
               value={searchQuery}
               onChangeText={setSearchQuery}
+              keyboardAppearance={isDark ? "dark" : "light"}
             />
             {searchQuery.length > 0 && (
               <TouchableOpacity onPress={() => setSearchQuery("")}>
@@ -400,6 +403,7 @@ export default function CreateGroupScreen() {
               value={groupName}
               onChangeText={setGroupName}
               maxLength={50}
+              keyboardAppearance={isDark ? "dark" : "light"}
             />
           </View>
 
@@ -414,6 +418,7 @@ export default function CreateGroupScreen() {
               onChangeText={setGroupDescription}
               multiline
               maxLength={200}
+              keyboardAppearance={isDark ? "dark" : "light"}
             />
           </View>
 

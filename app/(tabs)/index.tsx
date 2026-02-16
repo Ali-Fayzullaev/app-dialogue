@@ -14,24 +14,24 @@ import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Alert,
-  Animated,
-  FlatList,
-  Image,
-  Modal,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Alert,
+    Animated,
+    FlatList,
+    Image,
+    Modal,
+    Platform,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import {
-  GestureHandlerRootView,
-  Swipeable,
+    GestureHandlerRootView,
+    Swipeable,
 } from "react-native-gesture-handler";
 
 interface ChatItem extends Chat {
@@ -299,6 +299,7 @@ export default function ChatsScreen() {
                 id: cached.other_user.id,
                 username: cached.other_user.username,
                 avatar_url: cached.other_user.avatar_url,
+                public_key: null,
                 created_at: "",
               },
             ]
@@ -1098,23 +1099,19 @@ export default function ChatsScreen() {
                     <>
                       {item.last_message?.sender_id === user?.id &&
                         item.last_message && (
-                          <>
-                            <Ionicons
-                              name={
-                                item.last_message.is_read
-                                  ? "checkmark-done"
-                                  : (item.last_message as any).is_delivered
-                                    ? "checkmark-done"
-                                    : "checkmark"
-                              }
-                              size={14}
-                              color={
-                                item.last_message.is_read
-                                  ? "#4FC3F7"
-                                  : colors.textSecondary
-                              }
-                            />{" "}
-                          </>
+                          <Text
+                            style={{
+                              color: item.last_message.is_read
+                                ? "#4FC3F7"
+                                : colors.textSecondary,
+                            }}
+                          >
+                            {item.last_message.is_read
+                              ? "✓✓ "
+                              : (item.last_message as any).is_delivered
+                                ? "✓✓ "
+                                : "✓ "}
+                          </Text>
                         )}
                       {isGroup && item.last_message
                         ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `

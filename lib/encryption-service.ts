@@ -174,7 +174,7 @@ export async function encryptMessage(
     const keyBytes = hexToBytes(sharedSecret.substring(0, 64)); // 32 bytes = 256 bits
     const cryptoKey = await crypto.subtle.importKey(
       "raw",
-      keyBytes,
+      keyBytes.buffer as ArrayBuffer,
       { name: "AES-GCM" },
       false,
       ["encrypt"],
@@ -230,7 +230,7 @@ export async function decryptMessage(
     const keyBytes = hexToBytes(sharedSecret.substring(0, 64));
     const cryptoKey = await crypto.subtle.importKey(
       "raw",
-      keyBytes,
+      keyBytes.buffer as ArrayBuffer,
       { name: "AES-GCM" },
       false,
       ["decrypt"],
@@ -238,9 +238,9 @@ export async function decryptMessage(
 
     // Дешифруем
     const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv },
+      { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
       cryptoKey,
-      encryptedData,
+      encryptedData.buffer as ArrayBuffer,
     );
 
     const decoder = new TextDecoder();

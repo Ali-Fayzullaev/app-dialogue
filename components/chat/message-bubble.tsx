@@ -550,22 +550,17 @@ const MessageBubble: React.FC<MessageBubbleProps> = React.memo(
             {/* Time + status */}
             <Text style={[styles.messageTime, { color: colors.messageTime }]}>
               {formatMessageTime(item.created_at)}
-              {isMyMessage && (
-                <Text style={{ marginLeft: 4 }}>
+              {isMyMessage ? (
+                <Text
+                  style={{
+                    marginLeft: 4,
+                    color: item.is_read ? "#4FC3F7" : colors.messageTime,
+                  }}
+                >
                   {" "}
-                  <Ionicons
-                    name={
-                      item.is_read
-                        ? "checkmark-done"
-                        : item.is_delivered
-                          ? "checkmark-done"
-                          : "checkmark"
-                    }
-                    size={14}
-                    color={item.is_read ? "#4FC3F7" : colors.messageTime}
-                  />
+                  {item.is_read ? "✓✓" : item.is_delivered ? "✓✓" : "✓"}
                 </Text>
-              )}
+              ) : null}
             </Text>
             {item.updated_at && item.updated_at !== item.created_at && (
               <Text style={styles.editedLabel}>изменено</Text>

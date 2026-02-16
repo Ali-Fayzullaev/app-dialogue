@@ -1,7 +1,7 @@
 import { MessageBubble } from "@/components/chat";
 import {
-  QuickReactionBar,
-  ReactionUsersModal,
+    QuickReactionBar,
+    ReactionUsersModal,
 } from "@/components/message-reactions";
 import { resetAudioMode } from "@/components/voice-message-bubble";
 import { getAvatarColor } from "@/constants/colors";
@@ -10,11 +10,11 @@ import { useTheme } from "@/contexts/theme-context";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
 import { loadDraft, removeDraft, saveDraft } from "@/lib/draft-service";
 import {
-  decryptMessage,
-  encryptMessage,
-  getOrDeriveSharedSecret,
-  hasKeys as hasE2EEKeys,
-  isEncrypted,
+    decryptMessage,
+    encryptMessage,
+    getOrDeriveSharedSecret,
+    hasKeys as hasE2EEKeys,
+    isEncrypted,
 } from "@/lib/encryption-service";
 import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
@@ -34,23 +34,23 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActionSheetIOS,
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Dimensions,
-  FlatList,
-  Image,
-  KeyboardAvoidingView,
-  Linking,
-  Modal,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActionSheetIOS,
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Dimensions,
+    FlatList,
+    Image,
+    KeyboardAvoidingView,
+    Linking,
+    Modal,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { WebView } from "react-native-webview";
 
@@ -1385,11 +1385,38 @@ export default function ChatScreen() {
         },
         (payload) => {
           const updatedMsg = payload.new as Message;
+
+          // Проверяем deleted_for_users — если текущий пользователь в списке, убираем сообщение
+          const deletedFor: string[] =
+            (updatedMsg as any).deleted_for_users || [];
+          if (user?.id && deletedFor.includes(user.id)) {
+            setMessages((prev) =>
+              prev.filter((msg) => msg.id !== updatedMsg.id),
+            );
+            return;
+          }
+
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === updatedMsg.id ? { ...msg, ...updatedMsg } : msg,
             ),
           );
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "messages",
+        },
+        (payload) => {
+          const deletedMsg = payload.old as { id?: string };
+          if (deletedMsg.id) {
+            setMessages((prev) =>
+              prev.filter((msg) => msg.id !== deletedMsg.id),
+            );
+          }
         },
       )
       .on("broadcast", { event: "typing" }, (payload) => {

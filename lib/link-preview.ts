@@ -175,15 +175,24 @@ export async function fetchLinkPreview(
   }
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    // Используем allorigins.win прокси на web для обхода CORS
+    const isWeb =
+      typeof window !== "undefined" && typeof document !== "undefined";
+    const fetchUrl = isWeb
+      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
+      : url;
 
-    const response = await fetch(url, {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(fetchUrl, {
       signal: controller.signal,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; LinkPreview/1.0)",
-        Accept: "text/html",
-      },
+      headers: isWeb
+        ? { Accept: "text/html" }
+        : {
+            "User-Agent": "Mozilla/5.0 (compatible; LinkPreview/1.0)",
+            Accept: "text/html",
+          },
     });
 
     clearTimeout(timeoutId);
@@ -210,34 +219,46 @@ export async function fetchLinkPreview(
       return preview;
     }
 
-    if (!contentType.includes("text/html")) {
+    if (!contentType.includes("text/html") && !isWeb) {
       previewCache.set(url, null);
       return null;
     }
 
-    // Читаем только первые 50KB (хватает для мета-тегов)
-    const reader = response.body?.getReader();
-    if (!reader) {
-      previewCache.set(url, null);
-      return null;
+    // На web используем text() чтобы избежать "Premature close" от stream
+    let html: string;
+    if (isWeb) {
+      const fullText = await response.text();
+      // Берём только первые 50KB
+      html = fullText.substring(0, 50000);
+    } else {
+      // На нативе читаем стрим для экономии памяти
+      const reader = response.body?.getReader();
+      if (!reader) {
+        previewCache.set(url, null);
+        return null;
+      }
+
+      html = "";
+      const decoder = new TextDecoder();
+      let totalBytes = 0;
+      const maxBytes = 50000;
+
+      try {
+        while (totalBytes < maxBytes) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          html += decoder.decode(value, { stream: true });
+          totalBytes += value.length;
+          if (html.includes("</head>")) break;
+        }
+      } finally {
+        try {
+          reader.cancel();
+        } catch {
+          /* ignore */
+        }
+      }
     }
-
-    let html = "";
-    const decoder = new TextDecoder();
-    let totalBytes = 0;
-    const maxBytes = 50000;
-
-    while (totalBytes < maxBytes) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      html += decoder.decode(value, { stream: true });
-      totalBytes += value.length;
-
-      // Если нашли </head> — хватит, мета-теги в head
-      if (html.includes("</head>")) break;
-    }
-
-    reader.cancel();
 
     const preview = parseOGTags(html, url);
 

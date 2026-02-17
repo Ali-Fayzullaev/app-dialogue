@@ -7,6 +7,8 @@ import { resetAudioMode } from "@/components/voice-message-bubble";
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
+import { useBlockStatus } from "@/hooks/use-block-status";
+import { useChatSearch } from "@/hooks/use-chat-search";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
 import { loadDraft, removeDraft, saveDraft } from "@/lib/draft-service";
 import {
@@ -83,6 +85,8 @@ const safeNotificationHaptic = (
   }
 };
 
+const MESSAGES_PAGE_SIZE = 50;
+
 export default function ChatScreen() {
   const { id, highlightMessage } = useLocalSearchParams<{
     id: string;
@@ -91,6 +95,8 @@ export default function ChatScreen() {
   const [messages, setMessages] = useState<MessageWithSender[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -162,7 +168,6 @@ export default function ChatScreen() {
   );
   const router = useRouter();
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const blockChannelRef = useRef<RealtimeChannel | null>(null);
   const activityChannelRef = useRef<RealtimeChannel | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -222,13 +227,24 @@ export default function ChatScreen() {
   const [messageToPin, setMessageToPin] = useState<MessageWithSender | null>(
     null,
   );
-  // Поиск по сообщениям
-  const [showSearch, setShowSearch] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<MessageWithSender[]>([]);
-  const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
-  const searchAnimation = useRef(new Animated.Value(0)).current;
-  const searchInputRef = useRef<TextInput>(null);
+  // Поиск по сообщениям — из хука
+  const {
+    showSearch,
+    searchQuery,
+    searchResults,
+    currentSearchIndex,
+    searchAnimation,
+    searchInputRef,
+    openSearch,
+    closeSearch,
+    handleSearch,
+    navigateSearchResult,
+  } = useChatSearch(
+    messages,
+    scrollToMessageId,
+    highlightAnimation,
+    setHighlightedMessageId,
+  );
 
   // Реакции на сообщения
   const [showQuickReactions, setShowQuickReactions] = useState(false);
@@ -249,8 +265,15 @@ export default function ChatScreen() {
   );
 
   // Блокировка пользователя
-  const [isBlocked, setIsBlocked] = useState(false); // Я заблокировал собеседника
-  const [isBlockedByOther, setIsBlockedByOther] = useState(false); // Собеседник заблокировал меня
+  const {
+    isBlocked,
+    setIsBlocked,
+    isBlockedByOther,
+    setIsBlockedByOther,
+    checkBlockStatus,
+    subscribeToBlockStatus,
+    cleanupBlockSubscription,
+  } = useBlockStatus(user?.id, id, isGroup);
 
   // Мьют чата
   const [isMuted, setIsMuted] = useState(false);
@@ -341,9 +364,7 @@ export default function ChatScreen() {
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
       }
-      if (blockChannelRef.current) {
-        supabase.removeChannel(blockChannelRef.current);
-      }
+      cleanupBlockSubscription();
       if (activityChannelRef.current) {
         // Отправляем idle перед отключением
         activityChannelRef.current.send({
@@ -499,254 +520,114 @@ export default function ChatScreen() {
     }
   };
 
-  // Проверка блокировки между пользователями
-  const checkBlockStatus = async () => {
-    if (!user || !id || isGroup) return;
+  /**
+   * Обогащает сырые сообщения данными отправителей, ответов и E2EE.
+   * Используется и при начальной загрузке, и при подгрузке старых сообщений.
+   */
+  const enrichMessages = async (
+    rawMessages: Message[],
+  ): Promise<MessageWithSender[]> => {
+    const senderIds = [...new Set(rawMessages.map((m) => m.sender_id))];
 
-    try {
-      // Получаем участников чата
-      const { data: members } = await supabase
-        .from("chat_members")
-        .select("user_id")
-        .eq("chat_id", id);
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("*")
+      .in("id", senderIds);
 
-      const otherMemberIds =
-        members?.filter((m) => m.user_id !== user.id).map((m) => m.user_id) ||
-        [];
-      if (otherMemberIds.length === 0) return;
+    const profileMap = new Map(profiles?.map((p) => [p.id, p]));
 
-      const otherUserId = otherMemberIds[0];
+    // Собираем ID сообщений на которые отвечают
+    const replyToIds = rawMessages
+      .filter((m) => m.reply_to_id)
+      .map((m) => m.reply_to_id)
+      .filter((rid): rid is string => rid !== null);
 
-      // Проверяем заблокировал ли я его
-      const { data: blockedByMe } = await supabase
-        .from("blocked_users")
-        .select("id")
-        .eq("blocker_id", user.id)
-        .eq("blocked_id", otherUserId)
-        .maybeSingle();
+    // Получаем replied messages
+    let repliedMessagesMap = new Map<
+      string,
+      {
+        id: string;
+        content: string | null;
+        sender_id: string;
+        media_type: "image" | "video" | "audio" | "location" | "file" | null;
+      }
+    >();
+    if (replyToIds.length > 0) {
+      const { data: repliedMessages } = await supabase
+        .from("messages")
+        .select("id, content, sender_id, media_type")
+        .in("id", replyToIds);
 
-      setIsBlocked(!!blockedByMe);
-
-      // Проверяем заблокировал ли он меня
-      const { data: blockedByOther } = await supabase
-        .from("blocked_users")
-        .select("id")
-        .eq("blocker_id", otherUserId)
-        .eq("blocked_id", user.id)
-        .maybeSingle();
-
-      setIsBlockedByOther(!!blockedByOther);
-    } catch (error) {
-      console.error("Error checking block status:", error);
+      repliedMessagesMap = new Map(
+        repliedMessages?.map((m) => [m.id, m]) || [],
+      );
     }
-  };
 
-  // Realtime подписка на изменения блокировки
-  const subscribeToBlockStatus = () => {
-    if (!user || !id || isGroup) return;
-
-    // Подписываемся на изменения в таблице blocked_users
-    blockChannelRef.current = supabase
-      .channel(`block-status:${id}:${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*", // INSERT, UPDATE, DELETE
-          schema: "public",
-          table: "blocked_users",
-        },
-        async (payload) => {
-          // Получаем другого участника чата
-          const { data: members } = await supabase
-            .from("chat_members")
-            .select("user_id")
-            .eq("chat_id", id);
-
-          const otherMemberIds =
-            members
-              ?.filter((m) => m.user_id !== user.id)
-              .map((m) => m.user_id) || [];
-          if (otherMemberIds.length === 0) return;
-
-          const otherUserId = otherMemberIds[0];
-
-          if (payload.eventType === "INSERT") {
-            const newBlock = payload.new as {
-              blocker_id: string;
-              blocked_id: string;
-            };
-
-            // Проверяем касается ли это нас
-            if (
-              newBlock.blocker_id === user.id &&
-              newBlock.blocked_id === otherUserId
-            ) {
-              // Я заблокировал собеседника
-              setIsBlocked(true);
-              safeNotificationHaptic(Haptics.NotificationFeedbackType.Warning);
-            } else if (
-              newBlock.blocker_id === otherUserId &&
-              newBlock.blocked_id === user.id
-            ) {
-              // Собеседник заблокировал меня
-              setIsBlockedByOther(true);
-              safeNotificationHaptic(Haptics.NotificationFeedbackType.Warning);
-            }
-          } else if (payload.eventType === "DELETE") {
-            const oldBlock = payload.old as {
-              blocker_id?: string;
-              blocked_id?: string;
-            };
-
-            // Если старые данные пришли (REPLICA IDENTITY FULL включен)
-            if (oldBlock.blocker_id && oldBlock.blocked_id) {
-              // Проверяем касается ли это нас
-              if (
-                oldBlock.blocker_id === user.id &&
-                oldBlock.blocked_id === otherUserId
-              ) {
-                // Я разблокировал собеседника
-                setIsBlocked(false);
-                safeNotificationHaptic(
-                  Haptics.NotificationFeedbackType.Success,
-                );
-              } else if (
-                oldBlock.blocker_id === otherUserId &&
-                oldBlock.blocked_id === user.id
-              ) {
-                // Собеседник разблокировал меня
-                setIsBlockedByOther(false);
-                safeNotificationHaptic(
-                  Haptics.NotificationFeedbackType.Success,
-                );
+    const messagesWithSenders: MessageWithSender[] = rawMessages
+      .filter((m) => {
+        // Фильтруем сообщения, удалённые "для себя"
+        const deletedFor = (m as any).deleted_for_users || [];
+        return !deletedFor.includes(user?.id);
+      })
+      .map((m) => {
+        const repliedMsg = m.reply_to_id
+          ? repliedMessagesMap.get(m.reply_to_id)
+          : null;
+        return {
+          ...m,
+          sender: profileMap.get(m.sender_id) || null,
+          replied_message: repliedMsg
+            ? {
+                id: repliedMsg.id,
+                content: repliedMsg.content,
+                sender: profileMap.get(repliedMsg.sender_id) || null,
+                media_type: repliedMsg.media_type,
               }
-            } else {
-              // Fallback: если старые данные не пришли, перепроверяем статус
-              // Проверяем заблокировал ли я его
-              const { data: blockedByMe } = await supabase
-                .from("blocked_users")
-                .select("id")
-                .eq("blocker_id", user.id)
-                .eq("blocked_id", otherUserId)
-                .maybeSingle();
+            : null,
+          reactions: [],
+        };
+      });
 
-              const wasBlocked = isBlocked;
-              setIsBlocked(!!blockedByMe);
-
-              // Проверяем заблокировал ли он меня
-              const { data: blockedByOther } = await supabase
-                .from("blocked_users")
-                .select("id")
-                .eq("blocker_id", otherUserId)
-                .eq("blocked_id", user.id)
-                .maybeSingle();
-
-              const wasBlockedByOther = isBlockedByOther;
-              setIsBlockedByOther(!!blockedByOther);
-
-              // Haptic если статус изменился на разблокированный
-              if (
-                (wasBlocked && !blockedByMe) ||
-                (wasBlockedByOther && !blockedByOther)
-              ) {
-                safeNotificationHaptic(
-                  Haptics.NotificationFeedbackType.Success,
-                );
-              }
-            }
+    // E2EE: Дешифруем зашифрованные сообщения
+    if (sharedSecretRef.current) {
+      for (const msg of messagesWithSenders) {
+        if (msg.content && isEncrypted(msg.content)) {
+          try {
+            msg.content = await decryptMessage(
+              msg.content,
+              sharedSecretRef.current,
+            );
+          } catch {
+            // Оставляем как есть
           }
-        },
-      )
-      .subscribe();
+        }
+      }
+    }
+
+    return messagesWithSenders;
   };
 
   const fetchMessages = async () => {
     if (!id) return;
 
     try {
+      // Загружаем последние MESSAGES_PAGE_SIZE сообщений
       const { data, error } = await supabase
         .from("messages")
         .select("*")
         .eq("chat_id", id)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false })
+        .limit(MESSAGES_PAGE_SIZE);
 
       if (error) throw error;
 
-      const senderIds = [...new Set(data?.map((m) => m.sender_id) || [])];
+      // Переворачиваем обратно в хронологический порядок
+      const sorted = (data || []).reverse();
 
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("*")
-        .in("id", senderIds);
+      // Если получили меньше чем PAGE_SIZE — значит больше нет
+      setHasMoreMessages((data?.length || 0) >= MESSAGES_PAGE_SIZE);
 
-      const profileMap = new Map(profiles?.map((p) => [p.id, p]));
-
-      // Собираем ID сообщений на которые отвечают
-      const replyToIds = (
-        data?.filter((m) => m.reply_to_id).map((m) => m.reply_to_id) || []
-      ).filter((id): id is string => id !== null);
-
-      // Получаем replied messages
-      let repliedMessagesMap = new Map<
-        string,
-        {
-          id: string;
-          content: string | null;
-          sender_id: string;
-          media_type: "image" | "video" | "audio" | "location" | "file" | null;
-        }
-      >();
-      if (replyToIds.length > 0) {
-        const { data: repliedMessages } = await supabase
-          .from("messages")
-          .select("id, content, sender_id, media_type")
-          .in("id", replyToIds);
-
-        repliedMessagesMap = new Map(
-          repliedMessages?.map((m) => [m.id, m]) || [],
-        );
-      }
-
-      const messagesWithSenders: MessageWithSender[] = (data || [])
-        .filter((m) => {
-          // Фильтруем сообщения, удалённые "для себя"
-          const deletedFor = (m as any).deleted_for_users || [];
-          return !deletedFor.includes(user?.id);
-        })
-        .map((m) => {
-          const repliedMsg = m.reply_to_id
-            ? repliedMessagesMap.get(m.reply_to_id)
-            : null;
-          return {
-            ...m,
-            sender: profileMap.get(m.sender_id) || null,
-            replied_message: repliedMsg
-              ? {
-                  id: repliedMsg.id,
-                  content: repliedMsg.content,
-                  sender: profileMap.get(repliedMsg.sender_id) || null,
-                  media_type: repliedMsg.media_type,
-                }
-              : null,
-            reactions: [],
-          };
-        });
-
-      // E2EE: Дешифруем зашифрованные сообщения
-      if (sharedSecretRef.current) {
-        for (const msg of messagesWithSenders) {
-          if (msg.content && isEncrypted(msg.content)) {
-            try {
-              msg.content = await decryptMessage(
-                msg.content,
-                sharedSecretRef.current,
-              );
-            } catch {
-              // Оставляем как есть
-            }
-          }
-        }
-      }
+      const messagesWithSenders = await enrichMessages(sorted);
 
       setMessages(messagesWithSenders);
       messagesReadyRef.current = true;
@@ -775,11 +656,59 @@ export default function ChatScreen() {
       }
 
       // Загружаем реакции отдельно
-      await fetchReactions(data?.map((m) => m.id) || []);
+      await fetchReactions(sorted.map((m) => m.id));
     } catch (error) {
       console.error("Error fetching messages:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  /**
+   * Подгрузка старых сообщений при скролле вверх (infinite scroll).
+   */
+  const loadMoreMessages = async () => {
+    if (!id || loadingMore || !hasMoreMessages || messages.length === 0) return;
+
+    setLoadingMore(true);
+    try {
+      // Берём дату самого старого загруженного сообщения
+      const oldestMessage = messages[0];
+      const oldestDate = oldestMessage.created_at;
+
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("chat_id", id)
+        .lt("created_at", oldestDate)
+        .order("created_at", { ascending: false })
+        .limit(MESSAGES_PAGE_SIZE);
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        setHasMoreMessages(false);
+        return;
+      }
+
+      // Если получили меньше PAGE_SIZE — это последняя страница
+      if (data.length < MESSAGES_PAGE_SIZE) {
+        setHasMoreMessages(false);
+      }
+
+      // Переворачиваем в хронологический порядок
+      const sorted = data.reverse();
+      const olderMessages = await enrichMessages(sorted);
+
+      // Загружаем реакции для новых сообщений
+      await fetchReactions(sorted.map((m) => m.id));
+
+      // Добавляем старые сообщения В НАЧАЛО массива
+      setMessages((prev) => [...olderMessages, ...prev]);
+    } catch (error) {
+      console.error("Error loading more messages:", error);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -1355,7 +1284,29 @@ export default function ChatScreen() {
             }
           }
 
-          setMessages((prev) => [...prev, messageWithSender]);
+          // Если это наше сообщение — заменяем оптимистичное вместо дублирования
+          if (newMsg.sender_id === user?.id) {
+            setMessages((prev) => {
+              const hasOptimistic = prev.some((m) =>
+                m.id.startsWith("optimistic_"),
+              );
+              if (hasOptimistic) {
+                // Заменяем первое оптимистичное сообщение реальным
+                let replaced = false;
+                return prev.map((m) => {
+                  if (!replaced && m.id.startsWith("optimistic_")) {
+                    replaced = true;
+                    return messageWithSender;
+                  }
+                  return m;
+                });
+              }
+              // Нет оптимистичного — просто добавляем (на случай отправки из другого устройства)
+              return [...prev, messageWithSender];
+            });
+          } else {
+            setMessages((prev) => [...prev, messageWithSender]);
+          }
 
           // Если сообщение от другого — помечаем как доставленное и прочитанное
           if (newMsg.sender_id !== user?.id) {
@@ -1656,7 +1607,55 @@ export default function ChatScreen() {
         );
         setEditingMessage(null);
       } else {
-        // Отправка нового сообщения
+        // Отправка нового сообщения — оптимистичное обновление
+        const optimisticId = `optimistic_${Date.now()}`;
+        const now = new Date().toISOString();
+
+        // Создаём оптимистичное сообщение для мгновенного отображения
+        const optimisticMsg: MessageWithSender = {
+          id: optimisticId,
+          chat_id: id,
+          sender_id: user.id,
+          content: messageText, // Показываем расшифрованный текст
+          created_at: now,
+          updated_at: now,
+          is_read: false,
+          is_delivered: false,
+          media_url: null,
+          media_type: null,
+          reply_to_id: replyingTo?.id || null,
+          forwarded_from_id: null,
+          forwarded_from_username: null,
+          latitude: null,
+          longitude: null,
+          location_name: null,
+          file_name: null,
+          file_size: null,
+          audio_waveform: null,
+          audio_duration: null,
+          deleted_for_users: [],
+          sender: {
+            id: user.id,
+            username: user.user_metadata?.username || "Вы",
+            avatar_url: user.user_metadata?.avatar_url || null,
+            created_at: now,
+            public_key: null,
+          },
+          replied_message: replyingTo
+            ? {
+                id: replyingTo.id,
+                content: replyingTo.content,
+                sender: replyingTo.sender,
+                media_type: replyingTo.media_type,
+              }
+            : null,
+          reactions: [],
+        };
+
+        // Мгновенно добавляем в UI
+        setMessages((prev) => [...prev, optimisticMsg]);
+        setTimeout(() => scrollToBottom(true), 50);
+
         const messageData: {
           chat_id: string;
           sender_id: string;
@@ -1675,7 +1674,11 @@ export default function ChatScreen() {
 
         const { error } = await supabase.from("messages").insert(messageData);
 
-        if (error) throw error;
+        if (error) {
+          // Ошибка — убираем оптимистичное сообщение
+          setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+          throw error;
+        }
 
         setReplyingTo(null);
       }
@@ -2096,118 +2099,6 @@ export default function ChatScreen() {
         setMessageToPin(null);
       }, 200);
     }
-  };
-
-  // Функции поиска по сообщениям
-  const openSearch = () => {
-    setShowSearch(true);
-    Animated.timing(searchAnimation, {
-      toValue: 1,
-      duration: 250,
-      useNativeDriver: true,
-    }).start(() => {
-      searchInputRef.current?.focus();
-    });
-  };
-
-  const closeSearch = () => {
-    Animated.timing(searchAnimation, {
-      toValue: 0,
-      duration: 200,
-      useNativeDriver: true,
-    }).start(() => {
-      setShowSearch(false);
-      setSearchQuery("");
-      setSearchResults([]);
-      setCurrentSearchIndex(0);
-      setHighlightedMessageId(null);
-    });
-  };
-
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-
-    if (query.trim().length < 2) {
-      setSearchResults([]);
-      setCurrentSearchIndex(0);
-      return;
-    }
-
-    const lowerQuery = query.toLowerCase();
-    const results = messages.filter(
-      (m) => m.content && m.content.toLowerCase().includes(lowerQuery),
-    );
-
-    setSearchResults(results);
-    setCurrentSearchIndex(results.length > 0 ? 0 : -1);
-
-    // Перейти к первому результату
-    if (results.length > 0) {
-      scrollToSearchResult(0, results);
-    }
-  };
-
-  const scrollToSearchResult = (
-    index: number,
-    results?: MessageWithSender[],
-  ) => {
-    const searchList = results || searchResults;
-    if (searchList.length === 0 || index < 0 || index >= searchList.length)
-      return;
-
-    const targetMessage = searchList[index];
-    const msgIndex = messages.findIndex((m) => m.id === targetMessage.id);
-
-    if (msgIndex !== -1) {
-      setHighlightedMessageId(targetMessage.id);
-
-      scrollToMessageId(targetMessage.id, true);
-
-      // Анимация подсветки
-      highlightAnimation.setValue(0);
-      Animated.sequence([
-        Animated.timing(highlightAnimation, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(highlightAnimation, {
-          toValue: 0.3,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-        Animated.timing(highlightAnimation, {
-          toValue: 1,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-        Animated.delay(500),
-        Animated.timing(highlightAnimation, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-      ]).start(() => {
-        setHighlightedMessageId(null);
-      });
-
-      safeHaptic(Haptics.ImpactFeedbackStyle.Light);
-    }
-  };
-
-  const navigateSearchResult = (direction: "next" | "prev") => {
-    if (searchResults.length === 0) return;
-
-    let newIndex: number;
-    if (direction === "next") {
-      newIndex = (currentSearchIndex + 1) % searchResults.length;
-    } else {
-      newIndex =
-        (currentSearchIndex - 1 + searchResults.length) % searchResults.length;
-    }
-
-    setCurrentSearchIndex(newIndex);
-    scrollToSearchResult(newIndex);
   };
 
   const startEditingMessage = (message: MessageWithSender) => {
@@ -3444,8 +3335,7 @@ export default function ChatScreen() {
             {searchQuery.length > 0 && (
               <TouchableOpacity
                 onPress={() => {
-                  setSearchQuery("");
-                  setSearchResults([]);
+                  handleSearch("");
                   searchInputRef.current?.focus();
                 }}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -3681,6 +3571,13 @@ export default function ChatScreen() {
             setShowScrollButton(!nearBottom);
           }}
           scrollEventThrottle={100}
+          onEndReached={() => {
+            // В inverted FlatList onEndReached срабатывает при скролле вверх (к старым)
+            if (hasMoreMessages && !loadingMore) {
+              loadMoreMessages();
+            }
+          }}
+          onEndReachedThreshold={0.3}
           onScrollToIndexFailed={(info) => {
             setTimeout(() => {
               flatListRef.current?.scrollToIndex({
@@ -3691,6 +3588,13 @@ export default function ChatScreen() {
             }, 200);
           }}
           showsVerticalScrollIndicator={false}
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={{ paddingVertical: 16, alignItems: "center" }}>
+                <ActivityIndicator size="small" color={colors.primary} />
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <View style={styles.emptyIcon}>

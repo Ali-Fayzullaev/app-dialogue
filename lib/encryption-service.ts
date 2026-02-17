@@ -21,6 +21,7 @@
 
 import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 
 // --- Ключевые константы ---
 const PRIVATE_KEY_STORE = "e2ee_private_key";
@@ -29,6 +30,49 @@ const SHARED_SECRET_PREFIX = "e2ee_shared_";
 const E2E_PREFIX = "e2e:";
 const KEY_LENGTH = 32; // 256 бит
 const IV_LENGTH = 12; // 96 бит для AES-GCM
+
+// --- Web-совместимая обёртка для SecureStore ---
+// На web используем localStorage, на нативных — expo-secure-store
+const storage = {
+  async getItem(key: string): Promise<string | null> {
+    try {
+      if (Platform.OS === "web") {
+        return typeof window !== "undefined"
+          ? window.localStorage.getItem(key)
+          : null;
+      }
+      return await SecureStore.getItemAsync(key);
+    } catch {
+      return null;
+    }
+  },
+  async setItem(key: string, value: string): Promise<void> {
+    try {
+      if (Platform.OS === "web") {
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(key, value);
+        }
+        return;
+      }
+      await SecureStore.setItemAsync(key, value);
+    } catch {
+      // ignore
+    }
+  },
+  async deleteItem(key: string): Promise<void> {
+    try {
+      if (Platform.OS === "web") {
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(key);
+        }
+        return;
+      }
+      await SecureStore.deleteItemAsync(key);
+    } catch {
+      // ignore
+    }
+  },
+};
 
 // --- Вспомогательные функции ---
 
@@ -84,8 +128,8 @@ export async function generateKeyPair(): Promise<string> {
   );
 
   // Сохраняем ключи локально
-  await SecureStore.setItemAsync(PRIVATE_KEY_STORE, privateKeyHex);
-  await SecureStore.setItemAsync(PUBLIC_KEY_STORE, publicKeyHex);
+  await storage.setItem(PRIVATE_KEY_STORE, privateKeyHex);
+  await storage.setItem(PUBLIC_KEY_STORE, publicKeyHex);
 
   return publicKeyHex;
 }
@@ -94,21 +138,21 @@ export async function generateKeyPair(): Promise<string> {
  * Получить свой публичный ключ
  */
 export async function getPublicKey(): Promise<string | null> {
-  return SecureStore.getItemAsync(PUBLIC_KEY_STORE);
+  return storage.getItem(PUBLIC_KEY_STORE);
 }
 
 /**
  * Получить свой приватный ключ
  */
 export async function getPrivateKey(): Promise<string | null> {
-  return SecureStore.getItemAsync(PRIVATE_KEY_STORE);
+  return storage.getItem(PRIVATE_KEY_STORE);
 }
 
 /**
  * Проверить наличие ключей
  */
 export async function hasKeys(): Promise<boolean> {
-  const pk = await SecureStore.getItemAsync(PRIVATE_KEY_STORE);
+  const pk = await storage.getItem(PRIVATE_KEY_STORE);
   return pk !== null;
 }
 
@@ -145,12 +189,12 @@ export async function getOrDeriveSharedSecret(
   const cacheKey = `${SHARED_SECRET_PREFIX}${chatId}`;
 
   // Проверяем кеш
-  const cached = await SecureStore.getItemAsync(cacheKey);
+  const cached = await storage.getItem(cacheKey);
   if (cached) return cached;
 
   // Вычисляем и кешируем
   const shared = await deriveSharedSecret(otherPublicKey);
-  await SecureStore.setItemAsync(cacheKey, shared);
+  await storage.setItem(cacheKey, shared);
 
   return shared;
 }
@@ -265,8 +309,8 @@ export function isEncrypted(text: string): boolean {
  */
 export async function clearE2EEData(): Promise<void> {
   try {
-    await SecureStore.deleteItemAsync(PRIVATE_KEY_STORE);
-    await SecureStore.deleteItemAsync(PUBLIC_KEY_STORE);
+    await storage.deleteItem(PRIVATE_KEY_STORE);
+    await storage.deleteItem(PUBLIC_KEY_STORE);
     // Shared secrets тоже очищаются при необходимости
   } catch (error) {
     console.error("[E2EE] Error clearing data:", error);

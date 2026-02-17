@@ -5,6 +5,11 @@
  * generateKeyPair, deriveSharedSecret, encrypt/decrypt цикл.
  */
 
+// ---- Мок react-native (Platform) ----
+jest.mock("react-native", () => ({
+  Platform: { OS: "ios" },
+}));
+
 // ---- Мок expo-secure-store ----
 const secureStore: Record<string, string> = {};
 
@@ -198,6 +203,7 @@ describe("EncryptionService", () => {
     });
 
     it("не расшифрует с неправильным ключом", async () => {
+      const spy = jest.spyOn(console, "error").mockImplementation(() => {});
       await generateKeyPair();
       const sharedSecret = await deriveSharedSecret("correct_partner");
 
@@ -208,6 +214,7 @@ describe("EncryptionService", () => {
       const result = await decryptMessage(encrypted, wrongSecret);
       // Должен вернуть сообщение об ошибке
       expect(result).toBe("[Не удалось расшифровать сообщение]");
+      spy.mockRestore();
     });
 
     it("шифрует кириллицу и эмодзи", async () => {

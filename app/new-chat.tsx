@@ -1,4 +1,4 @@
-import { colors, getAvatarColor } from "@/constants/colors";
+import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import { supabase } from "@/lib/supabase";
@@ -6,7 +6,7 @@ import { Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -25,8 +25,10 @@ export default function NewChatScreen() {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const { user } = useAuth();
-  const { isDark } = useTheme();
+  const { colors, isDark } = useTheme();
   const router = useRouter();
+
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   useEffect(() => {
     if (searchQuery.length >= 2) {
@@ -231,126 +233,127 @@ export default function NewChatScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: 50,
-    paddingBottom: 12,
-    paddingHorizontal: 16,
-    backgroundColor: colors.primary,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: colors.textLight,
-  },
-  headerSpacer: {
-    width: 40,
-  },
-  searchContainer: {
-    padding: 16,
-    backgroundColor: colors.background,
-  },
-  searchWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.inputBackground,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-  },
-  searchInput: {
-    flex: 1,
-    paddingVertical: 14,
-    fontSize: 16,
-    color: colors.textPrimary,
-  },
-  clearButton: {
-    padding: 6,
-  },
-  listContent: {
-    paddingBottom: 20,
-  },
-  userItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: colors.background,
-  },
-  avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 14,
-  },
-  avatarImage: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    marginRight: 14,
-  },
-  avatarText: {
-    color: colors.textLight,
-    fontSize: 20,
-    fontWeight: "600",
-  },
-  userInfo: {
-    flex: 1,
-  },
-  username: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: colors.textPrimary,
-  },
-  userSubtitle: {
-    fontSize: 13,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 40,
-  },
-  emptyIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.primaryLight,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: "600",
-    color: colors.textPrimary,
-    textAlign: "center",
-    marginBottom: 8,
-  },
-  emptySubtitle: {
-    fontSize: 15,
-    color: colors.textSecondary,
-    textAlign: "center",
-  },
-});
+const createStyles = (colors: any) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingTop: 50,
+      paddingBottom: 12,
+      paddingHorizontal: 16,
+      backgroundColor: colors.primary,
+    },
+    backButton: {
+      width: 40,
+      height: 40,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    headerTitle: {
+      fontSize: 18,
+      fontWeight: "600",
+      color: colors.textLight,
+    },
+    headerSpacer: {
+      width: 40,
+    },
+    searchContainer: {
+      padding: 16,
+      backgroundColor: colors.background,
+    },
+    searchWrapper: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.inputBackground,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+    },
+    searchInput: {
+      flex: 1,
+      paddingVertical: 14,
+      fontSize: 16,
+      color: colors.textPrimary,
+    },
+    clearButton: {
+      padding: 6,
+    },
+    listContent: {
+      paddingBottom: 20,
+    },
+    userItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 14,
+      paddingHorizontal: 16,
+      backgroundColor: colors.background,
+    },
+    avatar: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      justifyContent: "center",
+      alignItems: "center",
+      marginRight: 14,
+    },
+    avatarImage: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      marginRight: 14,
+    },
+    avatarText: {
+      color: colors.textLight,
+      fontSize: 20,
+      fontWeight: "600",
+    },
+    userInfo: {
+      flex: 1,
+    },
+    username: {
+      fontSize: 17,
+      fontWeight: "600",
+      color: colors.textPrimary,
+    },
+    userSubtitle: {
+      fontSize: 13,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
+    loadingContainer: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    emptyContainer: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      paddingHorizontal: 40,
+    },
+    emptyIcon: {
+      width: 80,
+      height: 80,
+      borderRadius: 40,
+      backgroundColor: colors.primaryLight,
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: 20,
+    },
+    emptyTitle: {
+      fontSize: 20,
+      fontWeight: "600",
+      color: colors.textPrimary,
+      textAlign: "center",
+      marginBottom: 8,
+    },
+    emptySubtitle: {
+      fontSize: 15,
+      color: colors.textSecondary,
+      textAlign: "center",
+    },
+  });

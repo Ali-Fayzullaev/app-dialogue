@@ -352,70 +352,110 @@ export default function ChatsScreen() {
       );
       const chatIds = chatMembers.map((cm) => cm.chat_id);
 
-      const { data: chatsData, error: chatsError } = await supabase
-        .from("chats")
+      // Батчевые запросы — загружаем все данные за 5 запросов вместо N*5
+      const [
+        chatsResult,
+        allMembersResult,
+        allMessagesResult,
+        unreadResult,
+        presenceResult,
+      ] = await Promise.all([
+        // 1. Все чаты
+        supabase.from("chats").select("*").in("id", chatIds),
+        // 2. Все участники всех чатов
+        supabase
+          .from("chat_members")
+          .select("chat_id, user_id")
+          .in("chat_id", chatIds),
+        // 3. Последние сообщения — берём последние N сообщений на каждый чат
+        supabase
+          .from("messages")
+          .select("*")
+          .in("chat_id", chatIds)
+          .order("created_at", { ascending: false }),
+        // 4. Непрочитанные сообщения — все непрочитанные от других пользователей
+        supabase
+          .from("messages")
+          .select("chat_id", { count: "exact" })
+          .in("chat_id", chatIds)
+          .neq("sender_id", user.id)
+          .eq("is_read", false),
+        // 5. Онлайн статус всех пользователей
+        supabase.from("user_presence").select("user_id, is_online, last_seen"),
+      ]);
+
+      if (chatsResult.error) throw chatsResult.error;
+      const chatsData = chatsResult.data || [];
+
+      // Группируем участников по chat_id
+      const membersByChatId = new Map<string, string[]>();
+      (allMembersResult.data || []).forEach((m) => {
+        const list = membersByChatId.get(m.chat_id) || [];
+        list.push(m.user_id);
+        membersByChatId.set(m.chat_id, list);
+      });
+
+      // Собираем все уникальные user_id для загрузки профилей одним запросом
+      const allUserIds = [
+        ...new Set((allMembersResult.data || []).map((m) => m.user_id)),
+      ];
+      const { data: allProfiles } = await supabase
+        .from("profiles")
         .select("*")
-        .in("id", chatIds);
+        .in("id", allUserIds);
+      const profilesMap = new Map((allProfiles || []).map((p) => [p.id, p]));
 
-      if (chatsError) throw chatsError;
+      // Группируем последнее сообщение по chat_id (берём первое = самое новое)
+      const lastMessageByChatId = new Map<string, Message>();
+      (allMessagesResult.data || []).forEach((msg) => {
+        if (!lastMessageByChatId.has(msg.chat_id)) {
+          lastMessageByChatId.set(msg.chat_id, msg);
+        }
+      });
 
-      const chatsWithDetails = await Promise.all(
-        (chatsData || []).map(async (chat) => {
-          const { data: members } = await supabase
-            .from("chat_members")
-            .select("user_id")
-            .eq("chat_id", chat.id);
+      // Считаем непрочитанные по chat_id
+      const unreadByChatId = new Map<string, number>();
+      (unreadResult.data || []).forEach((row: { chat_id: string }) => {
+        unreadByChatId.set(
+          row.chat_id,
+          (unreadByChatId.get(row.chat_id) || 0) + 1,
+        );
+      });
 
-          const memberIds = members?.map((m) => m.user_id) || [];
-
-          const { data: profiles } = await supabase
-            .from("profiles")
-            .select("*")
-            .in("id", memberIds);
-
-          const { data: lastMessages } = await supabase
-            .from("messages")
-            .select("*")
-            .eq("chat_id", chat.id)
-            .order("created_at", { ascending: false })
-            .limit(1);
-
-          // Получаем количество непрочитанных сообщений
-          const { count: unreadCount } = await supabase
-            .from("messages")
-            .select("*", { count: "exact", head: true })
-            .eq("chat_id", chat.id)
-            .neq("sender_id", user.id)
-            .eq("is_read", false);
-
-          // Получаем онлайн статус собеседника
-          const otherMemberId = memberIds.find((id) => id !== user.id);
-          let otherUserOnline = false;
-
-          if (otherMemberId) {
-            const { data: presence } = await supabase
-              .from("user_presence")
-              .select("is_online, last_seen")
-              .eq("user_id", otherMemberId)
-              .single();
-
-            otherUserOnline = isUserReallyOnline(
-              presence?.is_online || false,
-              presence?.last_seen || null,
-            );
-          }
-
-          return {
-            ...chat,
-            members: profiles || [],
-            last_message: lastMessages?.[0] || null,
-            unread_count: unreadCount || 0,
-            other_user_online: otherUserOnline,
-            is_archived: archivedMap.get(chat.id) || false,
-            is_muted: mutedMap.get(chat.id) || false,
-          };
-        }),
+      // Мап онлайн-статуса
+      const presenceMap = new Map(
+        (presenceResult.data || []).map((p) => [p.user_id, p]),
       );
+
+      const chatsWithDetails = chatsData.map((chat) => {
+        const memberIds = membersByChatId.get(chat.id) || [];
+        const profiles = memberIds
+          .map((id) => profilesMap.get(id))
+          .filter(Boolean) as Profile[];
+        const lastMessage = lastMessageByChatId.get(chat.id) || null;
+        const unreadCount = unreadByChatId.get(chat.id) || 0;
+
+        // Онлайн-статус собеседника
+        const otherMemberId = memberIds.find((mid) => mid !== user.id);
+        let otherUserOnline = false;
+        if (otherMemberId) {
+          const presence = presenceMap.get(otherMemberId);
+          otherUserOnline = isUserReallyOnline(
+            presence?.is_online || false,
+            presence?.last_seen || null,
+          );
+        }
+
+        return {
+          ...chat,
+          members: profiles,
+          last_message: lastMessage,
+          unread_count: unreadCount,
+          other_user_online: otherUserOnline,
+          is_archived: archivedMap.get(chat.id) || false,
+          is_muted: mutedMap.get(chat.id) || false,
+        };
+      });
 
       chatsWithDetails.sort((a, b) => {
         const timeA = a.last_message?.created_at || a.created_at;

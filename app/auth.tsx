@@ -1,10 +1,9 @@
-import { colors } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -25,8 +24,10 @@ export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
 
   const { signIn, signUp } = useAuth();
-  const { isDark } = useTheme();
+  const { colors, isDark } = useTheme();
   const router = useRouter();
+
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const handleSubmit = async () => {
     if (!email || !password || (!isLogin && !username)) {
@@ -164,118 +165,119 @@ export default function AuthScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.primary,
-  },
-  headerContainer: {
-    paddingTop: 80,
-    paddingBottom: 40,
-    alignItems: "center",
-  },
-  logoContainer: {
-    alignItems: "center",
-  },
-  logoCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  appName: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: colors.textLight,
-    marginBottom: 8,
-  },
-  tagline: {
-    fontSize: 16,
-    color: "rgba(255,255,255,0.8)",
-  },
-  formContainer: {
-    flex: 1,
-  },
-  formCard: {
-    flex: 1,
-    backgroundColor: colors.background,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    paddingHorizontal: 24,
-    paddingTop: 32,
-  },
-  formTitle: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: colors.textPrimary,
-    marginBottom: 24,
-    textAlign: "center",
-  },
-  inputContainer: {
-    marginBottom: 16,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: colors.textSecondary,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  input: {
-    backgroundColor: colors.inputBackground,
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    fontSize: 16,
-    color: colors.textPrimary,
-  },
-  button: {
-    backgroundColor: colors.primary,
-    borderRadius: 16,
-    paddingVertical: 18,
-    alignItems: "center",
-    marginTop: 8,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  buttonText: {
-    color: colors.textLight,
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  dividerContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginVertical: 24,
-  },
-  divider: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  dividerText: {
-    marginHorizontal: 16,
-    color: colors.textMuted,
-    fontSize: 14,
-  },
-  switchButton: {
-    alignItems: "center",
-  },
-  switchText: {
-    color: colors.textSecondary,
-    fontSize: 15,
-  },
-  switchTextBold: {
-    color: colors.primary,
-    fontWeight: "600",
-  },
-});
+const createStyles = (colors: any) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.primary,
+    },
+    headerContainer: {
+      paddingTop: 80,
+      paddingBottom: 40,
+      alignItems: "center",
+    },
+    logoContainer: {
+      alignItems: "center",
+    },
+    logoCircle: {
+      width: 100,
+      height: 100,
+      borderRadius: 50,
+      backgroundColor: "rgba(255,255,255,0.2)",
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: 16,
+    },
+    appName: {
+      fontSize: 32,
+      fontWeight: "bold",
+      color: colors.textLight,
+      marginBottom: 8,
+    },
+    tagline: {
+      fontSize: 16,
+      color: "rgba(255,255,255,0.8)",
+    },
+    formContainer: {
+      flex: 1,
+    },
+    formCard: {
+      flex: 1,
+      backgroundColor: colors.background,
+      borderTopLeftRadius: 30,
+      borderTopRightRadius: 30,
+      paddingHorizontal: 24,
+      paddingTop: 32,
+    },
+    formTitle: {
+      fontSize: 24,
+      fontWeight: "bold",
+      color: colors.textPrimary,
+      marginBottom: 24,
+      textAlign: "center",
+    },
+    inputContainer: {
+      marginBottom: 16,
+    },
+    inputLabel: {
+      fontSize: 14,
+      fontWeight: "600",
+      color: colors.textSecondary,
+      marginBottom: 8,
+      marginLeft: 4,
+    },
+    input: {
+      backgroundColor: colors.inputBackground,
+      borderRadius: 16,
+      paddingHorizontal: 20,
+      paddingVertical: 16,
+      fontSize: 16,
+      color: colors.textPrimary,
+    },
+    button: {
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      paddingVertical: 18,
+      alignItems: "center",
+      marginTop: 8,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 4,
+    },
+    buttonDisabled: {
+      opacity: 0.7,
+    },
+    buttonText: {
+      color: colors.textLight,
+      fontSize: 18,
+      fontWeight: "700",
+    },
+    dividerContainer: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginVertical: 24,
+    },
+    divider: {
+      flex: 1,
+      height: 1,
+      backgroundColor: colors.border,
+    },
+    dividerText: {
+      marginHorizontal: 16,
+      color: colors.textMuted,
+      fontSize: 14,
+    },
+    switchButton: {
+      alignItems: "center",
+    },
+    switchText: {
+      color: colors.textSecondary,
+      fontSize: 15,
+    },
+    switchTextBold: {
+      color: colors.primary,
+      fontWeight: "600",
+    },
+  });

@@ -3,11 +3,12 @@ import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
-// ⚠️ ВАЖНО: Замени эти значения на свои из Supabase Dashboard
-// Settings -> API -> Project URL и anon public key
-export const SUPABASE_URL = "https://ryzpxwvdcmnxgwwrckbp.supabase.co";
-export const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ5enB4d3ZkY21ueGd3d3Jja2JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA1OTc5MTcsImV4cCI6MjA4NjE3MzkxN30.OpHnpHVeNQ9N8xoFpKwuiyjO6chmIhC-2tGXbEPy75w";
+// Supabase конфигурация из переменных окружения
+// Создайте файл .env в корне проекта с ключами:
+// EXPO_PUBLIC_SUPABASE_URL=your_url
+// EXPO_PUBLIC_SUPABASE_ANON_KEY=your_key
+export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL!;
+export const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
 
 // Адаптер хранилища для Expo (работает на iOS, Android и Web)
 const ExpoSecureStoreAdapter = {

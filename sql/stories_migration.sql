@@ -57,6 +57,9 @@ CREATE POLICY story_privacy_delete ON story_privacy_users FOR DELETE USING (auth
 -- Storage bucket для медиа статусов
 INSERT INTO storage.buckets (id, name, public) VALUES ('stories', 'stories', true) ON CONFLICT DO NOTHING;
 
+-- Realtime для просмотров историй
+ALTER PUBLICATION supabase_realtime ADD TABLE story_views;
+
 CREATE POLICY stories_storage_select ON storage.objects FOR SELECT USING (bucket_id = 'stories');
 CREATE POLICY stories_storage_insert ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'stories' AND auth.role() = 'authenticated');
 CREATE POLICY stories_storage_delete ON storage.objects FOR DELETE USING (bucket_id = 'stories' AND auth.uid()::text = (storage.foldername(name))[1]);

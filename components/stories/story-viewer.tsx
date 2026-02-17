@@ -11,8 +11,10 @@ import {
     fetchStoryViews,
     markStoryViewed,
 } from "@/lib/story-service";
+import { supabase } from "@/lib/supabase";
 import { Profile, UserStories } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
+import { RealtimeChannel } from "@supabase/supabase-js";
 import { ResizeMode, Video } from "expo-av";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -69,6 +71,8 @@ export function StoryViewer({
   const progressAnimation = useRef<Animated.CompositeAnimation | null>(null);
   const translateY = useRef(new Animated.Value(0)).current;
   const opacity = useRef(new Animated.Value(1)).current;
+  const storyViewsChannelRef = useRef<RealtimeChannel | null>(null);
+  const [viewCount, setViewCount] = useState(0);
 
   const currentUserStories = allUserStories[userIndex];
   const currentStory = currentUserStories?.stories[storyIndex];
@@ -87,9 +91,10 @@ export function StoryViewer({
     }
   }, [visible, initialUserIndex, initialStoryIndex]);
 
-  // Отметить как просмотренную
+  // Отметить как просмотренную — ТОЛЬКО когда viewer открыт
   useEffect(() => {
     if (
+      visible &&
       currentStory &&
       user &&
       currentStory.user_id !== user.id &&
@@ -98,7 +103,47 @@ export function StoryViewer({
       markStoryViewed(currentStory.id, user.id);
       currentStory.is_viewed = true;
     }
-  }, [currentStory?.id]);
+  }, [visible, currentStory?.id]);
+
+  // Realtime подписка на просмотры историй
+  useEffect(() => {
+    if (!visible || !isMyStory || !currentStory) return;
+
+    // Загружаем начальный счётчик
+    fetchStoryViews(currentStory.id).then((data) => {
+      setViewCount(data.length);
+      setViewers(data);
+    });
+
+    // Подписка на новые просмотры
+    const channel = supabase
+      .channel(`story-views:${currentStory.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "story_views",
+          filter: `story_id=eq.${currentStory.id}`,
+        },
+        async () => {
+          // Обновляем список просмотров
+          const data = await fetchStoryViews(currentStory.id);
+          setViewers(data);
+          setViewCount(data.length);
+        },
+      )
+      .subscribe();
+
+    storyViewsChannelRef.current = channel;
+
+    return () => {
+      if (storyViewsChannelRef.current) {
+        supabase.removeChannel(storyViewsChannelRef.current);
+        storyViewsChannelRef.current = null;
+      }
+    };
+  }, [visible, currentStory?.id, isMyStory]);
 
   // Запуск прогресса
   const startProgress = useCallback(
@@ -400,7 +445,11 @@ export function StoryViewer({
               onPress={handleShowViewers}
             >
               <Ionicons name="eye-outline" size={20} color="#fff" />
-              <Text style={styles.viewersText}>Просмотры</Text>
+              <Text style={styles.viewersText}>
+                {viewCount > 0
+                  ? `${viewCount} просмотр${viewCount === 1 ? "" : viewCount < 5 ? "а" : "ов"}`
+                  : "Нет просмотров"}
+              </Text>
             </TouchableOpacity>
           </SafeAreaView>
         )}

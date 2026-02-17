@@ -281,8 +281,12 @@ export default function ChatsScreen() {
     }
   };
 
-  // Загрузка из кеша (мгновенно)
+  // Загрузка из кеша (мгновенно) — только для текущего пользователя
   const loadFromCache = async () => {
+    if (!user) {
+      setIsLoadingFromCache(false);
+      return;
+    }
     const cachedChats = await cacheService.getCachedChats();
     if (cachedChats && cachedChats.length > 0) {
       // Преобразуем кешированные чаты в ChatItem формат

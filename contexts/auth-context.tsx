@@ -1,5 +1,7 @@
+import { cacheService } from "@/lib/cache-service";
 import { supabase } from "@/lib/supabase";
 import { Profile } from "@/types/database";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Session, User } from "@supabase/supabase-js";
 import React, { createContext, useContext, useEffect, useState } from "react";
 
@@ -146,6 +148,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setProfile(null);
       setUser(null);
       setSession(null);
+
+      // Очистка кеша чатов предыдущего пользователя
+      await cacheService.clearAll();
+
+      // Сброс темы до дефолтов
+      await AsyncStorage.multiRemove([
+        "@theme_mode",
+        "@accent_color",
+        "story_privacy_mode",
+      ]);
+
       await supabase.auth.signOut();
     } catch (error) {
       console.error("Error signing out:", error);

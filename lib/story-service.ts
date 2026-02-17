@@ -3,6 +3,7 @@
  * Загрузка медиа, создание, получение, просмотр, приватность.
  */
 
+import { getMutualContactIds } from "@/lib/contact-service";
 import { supabase } from "@/lib/supabase";
 import { Profile, StoryWithDetails, UserStories } from "@/types/database";
 import { decode } from "base64-arraybuffer";
@@ -86,8 +87,19 @@ export async function fetchAllStories(
 
     if (error || !stories || stories.length === 0) return [];
 
+    // Получаем список связанных контактов (двустороннее: я добавил ИЛИ меня добавили)
+    const contactIds = await getMutualContactIds(currentUserId);
+    const contactSet = new Set(contactIds);
+
+    // Фильтруем: свои истории + истории от контактов
+    const filteredStories = stories.filter(
+      (s) => s.user_id === currentUserId || contactSet.has(s.user_id),
+    );
+
+    if (filteredStories.length === 0) return [];
+
     // Получаем уникальные user_id
-    const userIds = [...new Set(stories.map((s) => s.user_id))];
+    const userIds = [...new Set(filteredStories.map((s) => s.user_id))];
 
     // Параллельно загружаем профили и просмотры текущего пользователя
     const [profilesRes, viewsRes] = await Promise.all([
@@ -98,7 +110,7 @@ export async function fetchAllStories(
         .eq("viewer_id", currentUserId)
         .in(
           "story_id",
-          stories.map((s) => s.id),
+          filteredStories.map((s) => s.id),
         ),
     ]);
 
@@ -114,7 +126,7 @@ export async function fetchAllStories(
     // Группируем по пользователям
     const userStoriesMap = new Map<string, StoryWithDetails[]>();
 
-    for (const story of stories) {
+    for (const story of filteredStories) {
       const user = profileMap.get(story.user_id);
       if (!user) continue;
 

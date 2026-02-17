@@ -11,6 +11,12 @@ import { useTheme } from "@/contexts/theme-context";
 import { useBlockStatus } from "@/hooks/use-block-status";
 import { useChatSearch } from "@/hooks/use-chat-search";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
+import {
+  addContact as addContactService,
+  hasOtherUserSentMessages,
+  hasUserSentMessages,
+  isContact,
+} from "@/lib/contact-service";
 import { loadDraft, removeDraft, saveDraft } from "@/lib/draft-service";
 import {
   decryptMessage,
@@ -279,6 +285,10 @@ export default function ChatScreen() {
   // Мьют чата
   const [isMuted, setIsMuted] = useState(false);
 
+  // Баннер «Новый контакт» (первое сообщение от незнакомого)
+  const [showNewContactBanner, setShowNewContactBanner] = useState(false);
+  const [isAddingContact, setIsAddingContact] = useState(false);
+
   // Пересылка сообщения
   const [forwardingMessage, setForwardingMessage] =
     useState<MessageWithSender | null>(null);
@@ -474,9 +484,32 @@ export default function ChatScreen() {
 
       setMemberCount(members?.length || 0);
 
-      // Загружаем статус мьюта
+      // Проверяем что текущий пользователь — участник чата
       const myMembership = members?.find((m) => m.user_id === user.id);
+      if (!myMembership) {
+        Alert.alert("Нет доступа", "Вы не являетесь участником этого чата.", [
+          { text: "OK", onPress: () => router.back() },
+        ]);
+        return;
+      }
       setIsMuted(myMembership?.is_muted ?? false);
+
+      // Проверяем «новый контакт» для личных чатов
+      // Баннер показываем ТОЛЬКО получателю: собеседник уже писал, а я ещё нет
+      if (!chat.is_group) {
+        const otherMemberId = members
+          ?.filter((m) => m.user_id !== user.id)
+          .map((m) => m.user_id)[0];
+        if (otherMemberId) {
+          const [inContacts, hasSent, otherHasSent] = await Promise.all([
+            isContact(user.id, otherMemberId),
+            hasUserSentMessages(user.id, id),
+            hasOtherUserSentMessages(id, user.id),
+          ]);
+          // Баннер: НЕ в контактах И собеседник писал И я ещё не отвечал
+          setShowNewContactBanner(!inContacts && !hasSent && otherHasSent);
+        }
+      }
 
       if (chat.is_group) {
         // Для группы используем имя группы
@@ -1680,6 +1713,11 @@ export default function ChatScreen() {
         }
 
         setReplyingTo(null);
+      }
+
+      // Скрываем баннер «новый контакт» после первого отправленного сообщения
+      if (showNewContactBanner) {
+        setShowNewContactBanner(false);
       }
 
       // Удаляем черновик после успешной отправки
@@ -3013,7 +3051,7 @@ export default function ChatScreen() {
   return (
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: colors.backgroundChat }]}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
     >
       {/* Custom Header */}
@@ -3765,6 +3803,120 @@ export default function ChatScreen() {
           <TouchableOpacity onPress={cancelReply} style={styles.replyCancel}>
             <Ionicons name="close" size={20} color={colors.textMuted} />
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* New Contact Banner — первое сообщение от незнакомого */}
+      {showNewContactBanner && !isGroup && !isBlocked && !isBlockedByOther && (
+        <View
+          style={[
+            styles.newContactBanner,
+            {
+              backgroundColor: colors.background,
+              borderTopColor: colors.border,
+            },
+          ]}
+        >
+          <View
+            style={[
+              styles.newContactContent,
+              { backgroundColor: isDark ? "#1A2A3A" : "#EFF6FF" },
+            ]}
+          >
+            <Ionicons
+              name="person-add-outline"
+              size={22}
+              color={isDark ? "#60A5FA" : "#2563EB"}
+            />
+            <View style={styles.newContactTextContainer}>
+              <Text
+                style={[
+                  styles.newContactTitle,
+                  { color: isDark ? "#60A5FA" : "#2563EB" },
+                ]}
+              >
+                {otherUser?.username || "Пользователь"} не в контактах
+              </Text>
+              <Text
+                style={[
+                  styles.newContactSubtitle,
+                  { color: colors.textSecondary },
+                ]}
+              >
+                Хотите добавить или заблокировать?
+              </Text>
+            </View>
+          </View>
+          <View style={styles.newContactActions}>
+            <TouchableOpacity
+              style={[
+                styles.newContactButton,
+                { backgroundColor: isDark ? "#3D2A2A" : "#FEE2E2" },
+              ]}
+              onPress={async () => {
+                if (!user || !otherUser) return;
+                try {
+                  await supabase.from("blocked_users").insert({
+                    blocker_id: user.id,
+                    blocked_id: otherUser.id,
+                  });
+                  setIsBlocked(true);
+                  setShowNewContactBanner(false);
+                  safeNotificationHaptic(
+                    Haptics.NotificationFeedbackType.Warning,
+                  );
+                } catch (err) {
+                  console.error("Error blocking:", err);
+                }
+              }}
+            >
+              <Ionicons
+                name="ban-outline"
+                size={16}
+                color={isDark ? "#F87171" : "#DC2626"}
+              />
+              <Text
+                style={[
+                  styles.newContactButtonText,
+                  { color: isDark ? "#F87171" : "#DC2626" },
+                ]}
+              >
+                Заблокировать
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.newContactButton,
+                {
+                  backgroundColor: colors.primary,
+                  opacity: isAddingContact ? 0.6 : 1,
+                },
+              ]}
+              disabled={isAddingContact}
+              onPress={async () => {
+                if (!user || !otherUser) return;
+                setIsAddingContact(true);
+                try {
+                  const ok = await addContactService(user.id, otherUser.id);
+                  if (ok) {
+                    setShowNewContactBanner(false);
+                    safeNotificationHaptic(
+                      Haptics.NotificationFeedbackType.Success,
+                    );
+                  }
+                } catch (err) {
+                  console.error("Error adding contact:", err);
+                } finally {
+                  setIsAddingContact(false);
+                }
+              }}
+            >
+              <Ionicons name="person-add" size={16} color="#fff" />
+              <Text style={[styles.newContactButtonText, { color: "#fff" }]}>
+                Добавить в контакты
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -5217,6 +5369,49 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === "ios" ? 8 : 8,
     alignItems: "flex-end",
     borderTopWidth: 1,
+  },
+  newContactBanner: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+    borderTopWidth: 1,
+  },
+  newContactContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 12,
+    gap: 10,
+    marginBottom: 8,
+  },
+  newContactTextContainer: {
+    flex: 1,
+  },
+  newContactTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  newContactSubtitle: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  newContactActions: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 4,
+  },
+  newContactButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    borderRadius: 10,
+    gap: 6,
+  },
+  newContactButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
   },
   blockedBanner: {
     padding: 12,

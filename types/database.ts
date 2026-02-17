@@ -334,6 +334,27 @@ export interface Database {
         };
         Relationships: [];
       };
+      contacts: {
+        Row: {
+          id: string;
+          user_id: string;
+          contact_id: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          contact_id: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          contact_id?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       blocked_users: {
         Row: {
           id: string;
@@ -554,6 +575,9 @@ export interface ChatFolderWithCount extends ChatFolder {
   chat_count: number;
   chat_ids: string[];
 }
+
+// Контакты
+export type Contact = Database["public"]["Tables"]["contacts"]["Row"];
 
 // Заблокированные пользователи
 export type BlockedUser = Database["public"]["Tables"]["blocked_users"]["Row"];

@@ -3,6 +3,7 @@
  * Вынесен из chat/[id].tsx для декомпозиции (~460 строк JSX).
  */
 
+import { MessageStatus } from "@/components/chat/message-status";
 import LinkPreviewCard from "@/components/link-preview-card";
 import { ReactionDisplay } from "@/components/message-reactions";
 import VoiceMessageBubble from "@/components/voice-message-bubble";
@@ -548,20 +549,19 @@ const MessageBubble: React.FC<MessageBubbleProps> = React.memo(
             )}
 
             {/* Time + status */}
-            <Text style={[styles.messageTime, { color: colors.messageTime }]}>
-              {formatMessageTime(item.created_at)}
-              {isMyMessage ? (
-                <Text
-                  style={{
-                    marginLeft: 4,
-                    color: item.is_read ? "#4FC3F7" : colors.messageTime,
-                  }}
-                >
-                  {" "}
-                  {item.is_read ? "✓✓" : item.is_delivered ? "✓✓" : "✓"}
-                </Text>
-              ) : null}
-            </Text>
+            <View style={styles.timeStatusRow}>
+              <Text style={[styles.messageTime, { color: colors.messageTime }]}>
+                {formatMessageTime(item.created_at)}
+              </Text>
+              {isMyMessage && (
+                <MessageStatus
+                  isRead={item.is_read}
+                  isDelivered={item.is_delivered}
+                  color={colors.messageTime}
+                  size={16}
+                />
+              )}
+            </View>
             {item.updated_at && item.updated_at !== item.created_at && (
               <Text style={styles.editedLabel}>изменено</Text>
             )}
@@ -762,10 +762,15 @@ const styles = StyleSheet.create({
     color: "#000",
     fontWeight: "600",
   },
+  timeStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    marginTop: 4,
+    gap: 2,
+  },
   messageTime: {
     fontSize: 11,
-    marginTop: 4,
-    textAlign: "right",
   },
   editedLabel: {
     fontSize: 10,

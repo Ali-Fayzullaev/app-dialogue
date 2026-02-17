@@ -3,13 +3,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import React from "react";
 import {
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Platform,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -192,6 +192,30 @@ export default function SettingsScreen() {
                 <Text style={styles.navValue}>
                   Заблокированные пользователи
                 </Text>
+              </View>
+              <Ionicons
+                name="chevron-forward"
+                size={20}
+                color={colors.textSecondary}
+              />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Конфиденциальность */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Конфиденциальность</Text>
+          <View style={styles.card}>
+            <TouchableOpacity
+              style={[styles.navItem, styles.navItemLast]}
+              onPress={() => router.push("/story-privacy" as any)}
+            >
+              <View style={[styles.navIcon, { backgroundColor: "#25D36620" }]}>
+                <Ionicons name="eye-outline" size={22} color="#25D366" />
+              </View>
+              <View style={styles.navContent}>
+                <Text style={styles.navLabel}>Приватность статусов</Text>
+                <Text style={styles.navValue}>Кто видит мои статусы</Text>
               </View>
               <Ionicons
                 name="chevron-forward"

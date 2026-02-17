@@ -1,8 +1,9 @@
 import { MessageBubble } from "@/components/chat";
 import {
-    QuickReactionBar,
-    ReactionUsersModal,
+  QuickReactionBar,
+  ReactionUsersModal,
 } from "@/components/message-reactions";
+import { SwipeableMessage } from "@/components/swipeable-message";
 import { resetAudioMode } from "@/components/voice-message-bubble";
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
@@ -12,11 +13,11 @@ import { useChatSearch } from "@/hooks/use-chat-search";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
 import { loadDraft, removeDraft, saveDraft } from "@/lib/draft-service";
 import {
-    decryptMessage,
-    encryptMessage,
-    getOrDeriveSharedSecret,
-    hasKeys as hasE2EEKeys,
-    isEncrypted,
+  decryptMessage,
+  encryptMessage,
+  getOrDeriveSharedSecret,
+  hasKeys as hasE2EEKeys,
+  isEncrypted,
 } from "@/lib/encryption-service";
 import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
@@ -36,23 +37,23 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-    ActionSheetIOS,
-    ActivityIndicator,
-    Alert,
-    Animated,
-    Dimensions,
-    FlatList,
-    Image,
-    KeyboardAvoidingView,
-    Linking,
-    Modal,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActionSheetIOS,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Dimensions,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { WebView } from "react-native-webview";
 
@@ -717,7 +718,7 @@ export default function ChatScreen() {
     if (messageIds.length === 0 || !user) return;
 
     try {
-      const { data: reactions, error } = await (supabase as any)
+      const { data: reactions, error } = await supabase
         .from("message_reactions")
         .select("*")
         .in("message_id", messageIds);
@@ -811,7 +812,7 @@ export default function ChatScreen() {
 
       if (myCurrentReaction?.emoji === emoji) {
         // Та же реакция - удаляем её
-        await (supabase as any)
+        await supabase
           .from("message_reactions")
           .delete()
           .eq("message_id", messageId)
@@ -839,7 +840,7 @@ export default function ChatScreen() {
         // Новая или другая реакция - используем upsert
         // Сначала удаляем старую реакцию (если была)
         if (myCurrentReaction) {
-          await (supabase as any)
+          await supabase
             .from("message_reactions")
             .delete()
             .eq("message_id", messageId)
@@ -847,7 +848,7 @@ export default function ChatScreen() {
         }
 
         // Добавляем новую
-        await (supabase as any).from("message_reactions").insert({
+        await supabase.from("message_reactions").insert({
           message_id: messageId,
           user_id: user.id,
           emoji,
@@ -967,7 +968,7 @@ export default function ChatScreen() {
         [];
 
       // Получаем общие закреплённые сообщения чата
-      const { data: chatPins } = await (supabase as any)
+      const { data: chatPins } = await supabase
         .from("pinned_messages")
         .select("message_id")
         .eq("chat_id", id)
@@ -975,7 +976,7 @@ export default function ChatScreen() {
         .order("created_at", { ascending: true });
 
       // Получаем личные закреплённые сообщения
-      const { data: personalPins } = await (supabase as any)
+      const { data: personalPins } = await supabase
         .from("pinned_messages")
         .select("message_id")
         .eq("chat_id", id)
@@ -983,11 +984,11 @@ export default function ChatScreen() {
         .order("created_at", { ascending: true });
 
       const allMessageIds = [
-        ...((chatPins as any[])?.map((p: any) => ({
+        ...(chatPins?.map((p) => ({
           id: p.message_id,
           isPersonal: false,
         })) || []),
-        ...((personalPins as any[])?.map((p: any) => ({
+        ...(personalPins?.map((p) => ({
           id: p.message_id,
           isPersonal: true,
         })) || []),
@@ -1079,9 +1080,7 @@ export default function ChatScreen() {
 
       console.log("Pinning message:", pinData);
 
-      const { error } = await (supabase as any)
-        .from("pinned_messages")
-        .insert(pinData);
+      const { error } = await supabase.from("pinned_messages").insert(pinData);
 
       if (error) {
         console.error("Pin error:", error);
@@ -1113,7 +1112,7 @@ export default function ChatScreen() {
     if (!id || !user) return;
 
     try {
-      let query = (supabase as any)
+      let query = supabase
         .from("pinned_messages")
         .delete()
         .eq("chat_id", id)
@@ -2963,28 +2962,34 @@ export default function ChatScreen() {
             </Text>
           </View>
         )}
-        <MessageBubble
-          item={item}
+        <SwipeableMessage
           isMyMessage={isMyMessage}
-          isGroup={isGroup}
-          isSelected={selectedMessages.has(item.id)}
-          isSelectMode={isSelectMode}
-          isHighlighted={highlightedMessageId === item.id}
-          isDark={isDark}
+          onSwipeReply={() => setReplyingTo(item)}
           colors={colors}
-          searchQuery={searchQuery}
-          playingAudioId={playingAudioId}
-          soundRef={soundRef}
-          highlightAnimation={highlightAnimation}
-          onLongPress={handleBubbleLongPress}
-          onToggleSelect={toggleSelectMessage}
-          onMediaPress={handleBubbleMediaPress}
-          onDocumentPress={handleBubbleDocumentPress}
-          onReplyPress={handleBubbleReplyPress}
-          onToggleReaction={toggleReaction}
-          onReactionLongPress={handleBubbleReactionLongPress}
-          onPlayStateChange={setPlayingAudioId}
-        />
+        >
+          <MessageBubble
+            item={item}
+            isMyMessage={isMyMessage}
+            isGroup={isGroup}
+            isSelected={selectedMessages.has(item.id)}
+            isSelectMode={isSelectMode}
+            isHighlighted={highlightedMessageId === item.id}
+            isDark={isDark}
+            colors={colors}
+            searchQuery={searchQuery}
+            playingAudioId={playingAudioId}
+            soundRef={soundRef}
+            highlightAnimation={highlightAnimation}
+            onLongPress={handleBubbleLongPress}
+            onToggleSelect={toggleSelectMessage}
+            onMediaPress={handleBubbleMediaPress}
+            onDocumentPress={handleBubbleDocumentPress}
+            onReplyPress={handleBubbleReplyPress}
+            onToggleReaction={toggleReaction}
+            onReactionLongPress={handleBubbleReactionLongPress}
+            onPlayStateChange={setPlayingAudioId}
+          />
+        </SwipeableMessage>
       </>
     );
   };

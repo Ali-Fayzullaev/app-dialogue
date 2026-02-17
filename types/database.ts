@@ -358,6 +358,128 @@ export interface Database {
         };
         Relationships: [];
       };
+      message_reactions: {
+        Row: {
+          id: string;
+          message_id: string;
+          user_id: string;
+          emoji: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          message_id: string;
+          user_id: string;
+          emoji: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          message_id?: string;
+          user_id?: string;
+          emoji?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      pinned_messages: {
+        Row: {
+          id: string;
+          chat_id: string;
+          message_id: string;
+          user_id: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          chat_id: string;
+          message_id: string;
+          user_id?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          chat_id?: string;
+          message_id?: string;
+          user_id?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+
+      // === Stories / Статусы ===
+      stories: {
+        Row: {
+          id: string;
+          user_id: string;
+          media_url: string;
+          media_type: "image" | "video";
+          caption: string | null;
+          created_at: string;
+          expires_at: string;
+          privacy: "all" | "contacts_except" | "only_share_with";
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          media_url: string;
+          media_type: "image" | "video";
+          caption?: string | null;
+          created_at?: string;
+          expires_at?: string;
+          privacy?: "all" | "contacts_except" | "only_share_with";
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          media_url?: string;
+          media_type?: "image" | "video";
+          caption?: string | null;
+          created_at?: string;
+          expires_at?: string;
+          privacy?: "all" | "contacts_except" | "only_share_with";
+        };
+        Relationships: [];
+      };
+      story_views: {
+        Row: {
+          id: string;
+          story_id: string;
+          viewer_id: string;
+          viewed_at: string;
+        };
+        Insert: {
+          id?: string;
+          story_id: string;
+          viewer_id: string;
+          viewed_at?: string;
+        };
+        Update: {
+          id?: string;
+          story_id?: string;
+          viewer_id?: string;
+          viewed_at?: string;
+        };
+        Relationships: [];
+      };
+      story_privacy_users: {
+        Row: {
+          id: string;
+          user_id: string;
+          target_user_id: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          target_user_id: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          target_user_id?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: {};
     Functions: {};
@@ -402,13 +524,12 @@ export interface GroupChatDetails extends Chat {
 }
 
 // Реакция на сообщение
-export interface MessageReaction {
-  id: string;
-  message_id: string;
-  user_id: string;
-  emoji: string;
-  created_at: string;
-}
+export type MessageReaction =
+  Database["public"]["Tables"]["message_reactions"]["Row"];
+
+// Закреплённое сообщение
+export type PinnedMessage =
+  Database["public"]["Tables"]["pinned_messages"]["Row"];
 
 // Реакция с информацией о пользователе
 export interface MessageReactionWithUser extends MessageReaction {
@@ -440,4 +561,25 @@ export type BlockedUser = Database["public"]["Tables"]["blocked_users"]["Row"];
 // Заблокированный пользователь с профилем
 export interface BlockedUserWithProfile extends BlockedUser {
   profile: Profile;
+}
+
+// === Stories / Статусы ===
+export type Story = Database["public"]["Tables"]["stories"]["Row"];
+export type StoryView = Database["public"]["Tables"]["story_views"]["Row"];
+export type StoryPrivacyUser =
+  Database["public"]["Tables"]["story_privacy_users"]["Row"];
+
+// История с информацией о пользователе и просмотрах
+export interface StoryWithDetails extends Story {
+  user: Profile;
+  view_count: number;
+  is_viewed: boolean; // текущий пользователь уже просмотрел
+}
+
+// Группа историй пользователя
+export interface UserStories {
+  user: Profile;
+  stories: StoryWithDetails[];
+  hasUnviewed: boolean; // есть непросмотренные
+  latestAt: string; // время последней истории
 }

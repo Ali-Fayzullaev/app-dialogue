@@ -1,3 +1,4 @@
+import { MessageStatus } from "@/components/chat/message-status";
 import { OfflineBanner } from "@/components/offline-banner";
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
@@ -1139,19 +1140,14 @@ export default function ChatsScreen() {
                     <>
                       {item.last_message?.sender_id === user?.id &&
                         item.last_message && (
-                          <Text
-                            style={{
-                              color: item.last_message.is_read
-                                ? "#4FC3F7"
-                                : colors.textSecondary,
-                            }}
-                          >
-                            {item.last_message.is_read
-                              ? "✓✓ "
-                              : (item.last_message as any).is_delivered
-                                ? "✓✓ "
-                                : "✓ "}
-                          </Text>
+                          <MessageStatus
+                            isRead={item.last_message.is_read}
+                            isDelivered={
+                              (item.last_message as any).is_delivered ?? false
+                            }
+                            color={colors.textSecondary}
+                            size={14}
+                          />
                         )}
                       {isGroup && item.last_message
                         ? `${item.members.find((m) => m.id === item.last_message?.sender_id)?.username || "Участник"}: `

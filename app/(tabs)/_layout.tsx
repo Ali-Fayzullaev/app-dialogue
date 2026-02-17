@@ -31,6 +31,15 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="statuses"
+        options={{
+          title: "Статусы",
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="circle.dashed" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="explore"
         options={{
           title: "Профиль",

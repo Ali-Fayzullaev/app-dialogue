@@ -325,7 +325,17 @@ export default function AppearanceScreen() {
               </View>
               <View style={styles.previewBubbleMine}>
                 <Text style={styles.previewText}>Отлично! А у тебя?</Text>
-                <Text style={styles.previewTime}>10:31 ✓✓</Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    gap: 2,
+                  }}
+                >
+                  <Text style={styles.previewTime}>10:31</Text>
+                  <Ionicons name="checkmark-done" size={14} color="#4FC3F7" />
+                </View>
               </View>
             </View>
           </View>

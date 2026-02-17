@@ -1,13 +1,13 @@
 import {
-    DarkTheme,
-    DefaultTheme,
-    ThemeProvider as NavigationThemeProvider,
+  DarkTheme,
+  DefaultTheme,
+  ThemeProvider as NavigationThemeProvider,
 } from "@react-navigation/native";
 import * as Notifications from "expo-notifications";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, Platform, View } from "react-native";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/contexts/auth-context";
@@ -38,14 +38,32 @@ function RootLayoutNav() {
     const subscription = Notifications.addNotificationResponseReceivedListener(
       (response) => {
         const data = response.notification.request.content.data;
-        if (data?.chatId) {
-          router.push(`/chat/${data.chatId}`);
+        if (data?.chatId && session) {
+          // Небольшая задержка чтобы навигация была готова
+          setTimeout(() => {
+            router.push(`/chat/${data.chatId}` as any);
+          }, 500);
         }
       },
     );
 
+    // Обрабатываем уведомление если приложение было открыто из закрытого состояния
+    // getLastNotificationResponseAsync недоступен на web
+    if (Platform.OS !== "web") {
+      Notifications.getLastNotificationResponseAsync().then((response) => {
+        if (response && session) {
+          const data = response.notification.request.content.data;
+          if (data?.chatId) {
+            setTimeout(() => {
+              router.push(`/chat/${data.chatId}` as any);
+            }, 1000);
+          }
+        }
+      });
+    }
+
     return () => subscription.remove();
-  }, [router]);
+  }, [router, session]);
 
   console.log("RootLayoutNav render:", {
     session: !!session,
@@ -84,6 +102,7 @@ function RootLayoutNav() {
         <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="search" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
+        <Stack.Screen name="story-privacy" options={{ headerShown: false }} />
         <Stack.Screen
           name="new-chat"
           options={{ presentation: "modal", title: "Новый чат" }}

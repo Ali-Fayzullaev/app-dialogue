@@ -159,16 +159,11 @@ export function usePushNotifications(userId: string | null) {
       });
 
     // Слушатель нажатия на уведомление
+    // Навигация обрабатывается в _layout.tsx через отдельный слушатель
     responseListener.current =
       Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content.data;
         console.log("Notification tapped:", data);
-
-        // Навигация к чату при нажатии
-        if (data.chatId) {
-          // router.push(`/chat/${data.chatId}`);
-          // Навигация будет обработана в _layout.tsx
-        }
       });
 
     return () => {

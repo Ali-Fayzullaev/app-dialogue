@@ -109,8 +109,8 @@ function parseOGTags(html: string, url: string): LinkPreviewData {
 
   return {
     url,
-    title: title ? decodeHTMLEntities(title) : null,
-    description: description ? decodeHTMLEntities(description) : null,
+    title: title ? sanitizeText(decodeHTMLEntities(title)) : null,
+    description: description ? sanitizeText(decodeHTMLEntities(description)) : null,
     image,
     siteName,
     favicon: getFavicon(url),
@@ -128,6 +128,16 @@ function decodeHTMLEntities(text: string): string {
     .replace(/&#x27;/g, "'")
     .replace(/&#x2F;/g, "/")
     .replace(/&nbsp;/g, " ");
+}
+
+// Санитизация текста — удаляем HTML-теги и потенциально опасные паттерны
+function sanitizeText(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, "")          // Удаляем HTML-теги
+    .replace(/javascript:/gi, "")     // Удаляем javascript: URI
+    .replace(/on\w+\s*=/gi, "")       // Удаляем обработчики событий
+    .trim()
+    .slice(0, 500);                   // Ограничиваем длину
 }
 
 // Проверить, является ли URL прямой ссылкой на изображение

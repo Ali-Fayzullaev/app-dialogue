@@ -53,7 +53,12 @@ CREATE POLICY "Users can view own folder items" ON chat_folder_items
   FOR SELECT USING (auth.uid() = user_id);
 
 CREATE POLICY "Users can add to own folders" ON chat_folder_items
-  FOR INSERT WITH CHECK (auth.uid() = user_id);
+  FOR INSERT WITH CHECK (
+    auth.uid() = user_id
+    AND chat_id IN (
+      SELECT cm.chat_id FROM chat_members cm WHERE cm.user_id = auth.uid()
+    )
+  );
 
 CREATE POLICY "Users can remove from own folders" ON chat_folder_items
   FOR DELETE USING (auth.uid() = user_id);

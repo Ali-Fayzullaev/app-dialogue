@@ -32,13 +32,15 @@ const KEY_LENGTH = 32; // 256 бит
 const IV_LENGTH = 12; // 96 бит для AES-GCM
 
 // --- Web-совместимая обёртка для SecureStore ---
-// На web используем localStorage, на нативных — expo-secure-store
+// На web используем sessionStorage (данные не сохраняются между вкладками),
+// на нативных — expo-secure-store (аппаратное шифрование)
 const storage = {
   async getItem(key: string): Promise<string | null> {
     try {
       if (Platform.OS === "web") {
+        // sessionStorage вместо localStorage — ключи очищаются при закрытии вкладки
         return typeof window !== "undefined"
-          ? window.localStorage.getItem(key)
+          ? window.sessionStorage.getItem(key)
           : null;
       }
       return await SecureStore.getItemAsync(key);
@@ -50,7 +52,7 @@ const storage = {
     try {
       if (Platform.OS === "web") {
         if (typeof window !== "undefined") {
-          window.localStorage.setItem(key, value);
+          window.sessionStorage.setItem(key, value);
         }
         return;
       }
@@ -63,7 +65,7 @@ const storage = {
     try {
       if (Platform.OS === "web") {
         if (typeof window !== "undefined") {
-          window.localStorage.removeItem(key);
+          window.sessionStorage.removeItem(key);
         }
         return;
       }
@@ -160,7 +162,9 @@ export async function hasKeys(): Promise<boolean> {
 
 /**
  * Вычислить общий секрет для чата (Diffie-Hellman–подобная деривация).
- * shared = SHA-256(privateKey + otherPublicKey)
+ * Двойной SHA-256 с солью для повышения стойкости:
+ *   step1 = SHA-256(privateKey + otherPublicKey)
+ *   shared = SHA-256(step1 + "E2EE_KDF_V1")
  */
 export async function deriveSharedSecret(
   otherPublicKey: string,
@@ -170,10 +174,15 @@ export async function deriveSharedSecret(
     throw new Error("[E2EE] No private key found. Generate keys first.");
   }
 
-  // Детерминистическая деривация общего секрета
-  const sharedSecret = await Crypto.digestStringAsync(
+  // Двухэтапная деривация (HKDF-like)
+  const step1 = await Crypto.digestStringAsync(
     Crypto.CryptoDigestAlgorithm.SHA256,
     privateKey + otherPublicKey,
+  );
+
+  const sharedSecret = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    step1 + "E2EE_KDF_V1",
   );
 
   return sharedSecret;
@@ -324,6 +333,7 @@ export interface E2EEStatus {
   enabled: boolean;
   hasKeys: boolean;
   otherHasKeys: boolean;
+  webWarning: boolean;
 }
 
 /**
@@ -337,5 +347,6 @@ export async function getE2EEStatus(
     enabled: myKeys && !!otherPublicKey,
     hasKeys: myKeys,
     otherHasKeys: !!otherPublicKey,
+    webWarning: Platform.OS === "web",
   };
 }

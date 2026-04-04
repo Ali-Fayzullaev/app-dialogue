@@ -94,12 +94,12 @@ ALTER PUBLICATION supabase_realtime ADD TABLE blocked_users;
 
 -- Обновляем RLS политику для сообщений, чтобы проверять блокировку
 -- ВАЖНО: Сначала удалите существующую политику INSERT для messages если она есть
--- DROP POLICY IF EXISTS "Users can send messages to their chats" ON messages;
+DROP POLICY IF EXISTS "Users can send messages to their chats" ON messages;
 
 -- Создаём новую политику с проверкой блокировки
--- CREATE POLICY "Users can send messages if not blocked" ON messages
---   FOR INSERT WITH CHECK (
---     auth.uid() = sender_id 
---     AND EXISTS (SELECT 1 FROM chat_members WHERE chat_id = messages.chat_id AND user_id = auth.uid())
---     AND can_send_message_to_chat(chat_id, auth.uid())
---   );
+CREATE POLICY "Users can send messages if not blocked" ON messages
+  FOR INSERT WITH CHECK (
+    auth.uid() = sender_id 
+    AND EXISTS (SELECT 1 FROM chat_members WHERE chat_id = messages.chat_id AND user_id = auth.uid())
+    AND can_send_message_to_chat(chat_id, auth.uid())
+  );

@@ -1,6 +1,7 @@
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
+import { escapeLikePattern } from "@/lib/chat-helpers";
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -100,7 +101,7 @@ export default function SearchScreen() {
           .from("messages")
           .select("id, content, created_at, chat_id, sender_id")
           .in("chat_id", chatIds)
-          .ilike("content", `%${query}%`)
+          .ilike("content", `%${escapeLikePattern(query)}%`)
           .order("created_at", { ascending: false })
           .limit(50);
 

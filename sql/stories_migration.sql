@@ -42,12 +42,53 @@ ALTER TABLE stories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE story_views ENABLE ROW LEVEL SECURITY;
 ALTER TABLE story_privacy_users ENABLE ROW LEVEL SECURITY;
 
+-- Функция для проверки видимости истории для конкретного зрителя
+CREATE OR REPLACE FUNCTION story_visible_to_user(story_row stories)
+RETURNS BOOLEAN AS $$
+BEGIN
+  -- Свои истории всегда видны
+  IF story_row.user_id = auth.uid() THEN
+    RETURN TRUE;
+  END IF;
+
+  -- Просроченные не видны
+  IF story_row.expires_at < now() THEN
+    RETURN FALSE;
+  END IF;
+
+  -- Проверяем приватность
+  IF story_row.privacy = 'all' THEN
+    RETURN TRUE;
+  ELSIF story_row.privacy = 'contacts_except' THEN
+    -- Видно всем кроме исключённых
+    RETURN NOT EXISTS (
+      SELECT 1 FROM story_privacy_users
+      WHERE user_id = story_row.user_id AND target_user_id = auth.uid()
+    );
+  ELSIF story_row.privacy = 'only_share_with' THEN
+    -- Видно только выбранным
+    RETURN EXISTS (
+      SELECT 1 FROM story_privacy_users
+      WHERE user_id = story_row.user_id AND target_user_id = auth.uid()
+    );
+  END IF;
+
+  RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- Политики
-CREATE POLICY stories_select ON stories FOR SELECT USING (true);
+CREATE POLICY stories_select ON stories FOR SELECT
+  USING (story_visible_to_user(stories));
 CREATE POLICY stories_insert ON stories FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY stories_delete ON stories FOR DELETE USING (auth.uid() = user_id);
 
-CREATE POLICY story_views_select ON story_views FOR SELECT USING (true);
+-- Просмотры: видны только автору истории
+CREATE POLICY story_views_select ON story_views FOR SELECT
+  USING (
+    auth.uid() = viewer_id
+    OR EXISTS (SELECT 1 FROM stories WHERE id = story_views.story_id AND user_id = auth.uid())
+  );
 CREATE POLICY story_views_insert ON story_views FOR INSERT WITH CHECK (auth.uid() = viewer_id);
 
 CREATE POLICY story_privacy_select ON story_privacy_users FOR SELECT USING (auth.uid() = user_id);
@@ -61,5 +102,9 @@ INSERT INTO storage.buckets (id, name, public) VALUES ('stories', 'stories', tru
 ALTER PUBLICATION supabase_realtime ADD TABLE story_views;
 
 CREATE POLICY stories_storage_select ON storage.objects FOR SELECT USING (bucket_id = 'stories');
-CREATE POLICY stories_storage_insert ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'stories' AND auth.role() = 'authenticated');
+CREATE POLICY stories_storage_insert ON storage.objects FOR INSERT WITH CHECK (
+  bucket_id = 'stories'
+  AND auth.role() = 'authenticated'
+  AND (storage.foldername(name))[1] = auth.uid()::text
+);
 CREATE POLICY stories_storage_delete ON storage.objects FOR DELETE USING (bucket_id = 'stories' AND auth.uid()::text = (storage.foldername(name))[1]);

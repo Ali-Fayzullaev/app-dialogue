@@ -4,6 +4,7 @@ import {
     GroupChatDetails,
     Profile,
 } from "@/types/database";
+import { escapeLikePattern } from "./chat-helpers";
 import { supabase } from "./supabase";
 
 export interface CreateGroupParams {
@@ -415,7 +416,7 @@ export const groupService = {
       let queryBuilder = supabase
         .from("profiles")
         .select("*")
-        .ilike("username", `%${query}%`)
+        .ilike("username", `%${escapeLikePattern(query)}%`)
         .limit(20);
 
       if (excludeIds.length > 0) {

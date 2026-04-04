@@ -6,6 +6,13 @@
 import { Ionicons } from "@expo/vector-icons";
 
 /**
+ * Экранирование спецсимволов Postgres LIKE/ILIKE (%, _, \)
+ */
+export function escapeLikePattern(input: string): string {
+  return input.replace(/[\\%_]/g, "\\$&");
+}
+
+/**
  * Форматирование времени сообщения (HH:MM)
  */
 export function formatMessageTime(dateString: string): string {

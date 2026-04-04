@@ -1,7 +1,7 @@
 import { MessageBubble } from "@/components/chat";
 import {
-  QuickReactionBar,
-  ReactionUsersModal,
+    QuickReactionBar,
+    ReactionUsersModal,
 } from "@/components/message-reactions";
 import { SwipeableMessage } from "@/components/swipeable-message";
 import { resetAudioMode } from "@/components/voice-message-bubble";
@@ -12,18 +12,18 @@ import { useBlockStatus } from "@/hooks/use-block-status";
 import { useChatSearch } from "@/hooks/use-chat-search";
 import { useUserOnlineStatus } from "@/hooks/use-presence";
 import {
-  addContact as addContactService,
-  hasOtherUserSentMessages,
-  hasUserSentMessages,
-  isContact,
+    addContact as addContactService,
+    hasOtherUserSentMessages,
+    hasUserSentMessages,
+    isContact,
 } from "@/lib/contact-service";
 import { loadDraft, removeDraft, saveDraft } from "@/lib/draft-service";
 import {
-  decryptMessage,
-  encryptMessage,
-  getOrDeriveSharedSecret,
-  hasKeys as hasE2EEKeys,
-  isEncrypted,
+    decryptMessage,
+    encryptMessage,
+    getOrDeriveSharedSecret,
+    hasKeys as hasE2EEKeys,
+    isEncrypted,
 } from "@/lib/encryption-service";
 import { pickImageOrVideo, takePhoto, uploadMedia } from "@/lib/media-service";
 import { supabase } from "@/lib/supabase";
@@ -43,23 +43,23 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActionSheetIOS,
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Dimensions,
-  FlatList,
-  Image,
-  KeyboardAvoidingView,
-  Linking,
-  Modal,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActionSheetIOS,
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Dimensions,
+    FlatList,
+    Image,
+    KeyboardAvoidingView,
+    Linking,
+    Modal,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { WebView } from "react-native-webview";
 
@@ -176,6 +176,7 @@ export default function ChatScreen() {
   const router = useRouter();
   const channelRef = useRef<RealtimeChannel | null>(null);
   const activityChannelRef = useRef<RealtimeChannel | null>(null);
+  const lastMessageTimeRef = useRef<number>(0);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const waveformDataRef = useRef<number[]>([]);
@@ -1590,6 +1591,17 @@ export default function ChatScreen() {
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !user || !id || sending) return;
+
+    // Rate limiting: минимум 300мс между сообщениями
+    const now = Date.now();
+    if (now - lastMessageTimeRef.current < 300) return;
+    lastMessageTimeRef.current = now;
+
+    // Ограничение длины сообщения
+    if (newMessage.length > 4096) {
+      Alert.alert("Ошибка", "Максимальная длина сообщения — 4096 символов");
+      return;
+    }
 
     // Проверка блокировки
     if (isBlocked || isBlockedByOther) {

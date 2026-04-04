@@ -35,6 +35,16 @@ export default function AuthScreen() {
       return;
     }
 
+    if (!isLogin && password.length < 8) {
+      Alert.alert("Ошибка", "Пароль должен быть минимум 8 символов");
+      return;
+    }
+
+    if (!isLogin && username.length < 2) {
+      Alert.alert("Ошибка", "Имя пользователя — минимум 2 символа");
+      return;
+    }
+
     setLoading(true);
 
     if (isLogin) {

@@ -1,6 +1,7 @@
 import { getAvatarColor } from "@/constants/colors";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "@/contexts/theme-context";
+import { escapeLikePattern } from "@/lib/chat-helpers";
 import { supabase } from "@/lib/supabase";
 import { Profile } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
@@ -46,7 +47,7 @@ export default function NewChatScreen() {
       const { data, error } = await supabase
         .from("profiles")
         .select("*")
-        .ilike("username", `%${searchQuery}%`)
+        .ilike("username", `%${escapeLikePattern(searchQuery)}%`)
         .neq("id", user.id) // Исключаем себя
         .limit(20);
 

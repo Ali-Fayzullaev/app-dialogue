@@ -3,7 +3,8 @@ import { supabase } from "@/lib/supabase";
 import { Profile } from "@/types/database";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Session, User } from "@supabase/supabase-js";
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import { AppState, AppStateStatus } from "react-native";
 
 interface AuthContextType {
   session: Session | null;
@@ -63,6 +64,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // Таймаут неактивности: разлогиниваем через 30 минут в фоне
+  const INACTIVITY_TIMEOUT = 30 * 60 * 1000;
+  const backgroundTimestampRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const handleAppState = (state: AppStateStatus) => {
+      if (state === "background" || state === "inactive") {
+        backgroundTimestampRef.current = Date.now();
+      } else if (state === "active" && backgroundTimestampRef.current && session) {
+        const elapsed = Date.now() - backgroundTimestampRef.current;
+        backgroundTimestampRef.current = null;
+        if (elapsed > INACTIVITY_TIMEOUT) {
+          console.log("Session expired due to inactivity");
+          signOut();
+        }
+      }
+    };
+    const sub = AppState.addEventListener("change", handleAppState);
+    return () => sub.remove();
+  }, [session]);
 
   const fetchProfile = async (userId: string) => {
     console.log("Fetching profile for:", userId);

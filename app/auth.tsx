@@ -3,7 +3,7 @@ import { useTheme } from "@/contexts/theme-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -16,12 +16,17 @@ import {
     View,
 } from "react-native";
 
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 60 * 1000; // 1 минута
+
 export default function AuthScreen() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
+  const loginAttemptsRef = useRef(0);
+  const lockoutUntilRef = useRef(0);
 
   const { signIn, signUp } = useAuth();
   const { colors, isDark } = useTheme();
@@ -40,6 +45,16 @@ export default function AuthScreen() {
       return;
     }
 
+    if (!isLogin && !/[A-Z]/.test(password)) {
+      Alert.alert("Ошибка", "Пароль должен содержать хотя бы одну заглавную букву");
+      return;
+    }
+
+    if (!isLogin && !/\d/.test(password)) {
+      Alert.alert("Ошибка", "Пароль должен содержать хотя бы одну цифру");
+      return;
+    }
+
     if (!isLogin && username.length < 2) {
       Alert.alert("Ошибка", "Имя пользователя — минимум 2 символа");
       return;
@@ -48,11 +63,28 @@ export default function AuthScreen() {
     setLoading(true);
 
     if (isLogin) {
+      // Rate limiting на логин
+      const now = Date.now();
+      if (now < lockoutUntilRef.current) {
+        const seconds = Math.ceil((lockoutUntilRef.current - now) / 1000);
+        Alert.alert("Подождите", `Слишком много попыток. Попробуйте через ${seconds} сек.`);
+        setLoading(false);
+        return;
+      }
+
       const { error } = await signIn(email, password);
       if (error) {
-        Alert.alert("Ошибка входа", error.message);
+        loginAttemptsRef.current += 1;
+        if (loginAttemptsRef.current >= MAX_LOGIN_ATTEMPTS) {
+          lockoutUntilRef.current = Date.now() + LOCKOUT_DURATION;
+          loginAttemptsRef.current = 0;
+          Alert.alert("Заблокировано", "Слишком много неудачных попыток. Подождите 1 минуту.");
+        } else {
+          Alert.alert("Ошибка входа", error.message);
+        }
         setLoading(false);
       } else {
+        loginAttemptsRef.current = 0;
         router.replace("/");
       }
     } else {

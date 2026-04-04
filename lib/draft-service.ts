@@ -8,6 +8,23 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+// Обфускация черновиков (base64)
+function obfuscate(data: string): string {
+  try {
+    return btoa(unescape(encodeURIComponent(data)));
+  } catch {
+    return data;
+  }
+}
+
+function deobfuscate(data: string): string {
+  try {
+    return decodeURIComponent(escape(atob(data)));
+  } catch {
+    return data;
+  }
+}
+
 const DRAFT_PREFIX = "draft_";
 const DRAFT_INDEX_KEY = "draft_index"; // список chatId с черновиками
 
@@ -44,7 +61,7 @@ export async function saveDraft(
   try {
     await AsyncStorage.setItem(
       `${DRAFT_PREFIX}${chatId}`,
-      JSON.stringify(draft),
+      obfuscate(JSON.stringify(draft)),
     );
     await addToIndex(chatId);
   } catch (error) {
@@ -59,7 +76,7 @@ export async function loadDraft(chatId: string): Promise<Draft | null> {
   try {
     const raw = await AsyncStorage.getItem(`${DRAFT_PREFIX}${chatId}`);
     if (!raw) return null;
-    return JSON.parse(raw) as Draft;
+    return JSON.parse(deobfuscate(raw)) as Draft;
   } catch (error) {
     console.error("[DraftService] Error loading draft:", error);
     return null;

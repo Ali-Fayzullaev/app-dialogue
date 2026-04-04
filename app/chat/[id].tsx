@@ -1247,8 +1247,21 @@ export default function ChatScreen() {
     scrollToPinnedMessage(newIndex);
   };
 
-  const subscribeToMessages = () => {
-    if (!id) return;
+  const subscribeToMessages = async () => {
+    if (!id || !user) return;
+
+    // Проверяем что пользователь — участник чата перед подпиской
+    const { data: membership } = await supabase
+      .from("chat_members")
+      .select("id")
+      .eq("chat_id", id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (!membership) {
+      console.warn("Realtime: user is not a member of chat", id);
+      return;
+    }
 
     channelRef.current = supabase
       .channel(`chat:${id}`)

@@ -1,5 +1,23 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+// Обфускация данных в AsyncStorage (base64, чтобы не хранить plaintext)
+function obfuscate(data: string): string {
+  try {
+    return btoa(unescape(encodeURIComponent(data)));
+  } catch {
+    return data;
+  }
+}
+
+function deobfuscate(data: string): string {
+  try {
+    return decodeURIComponent(escape(atob(data)));
+  } catch {
+    // Fallback: данные могут быть в старом формате (plain JSON)
+    return data;
+  }
+}
+
 // Ключи для кеша
 const CACHE_KEYS = {
   CHATS: "cache_chats",
@@ -88,9 +106,9 @@ class CacheService {
     // Память (быстро)
     this.memoryCache.set(key, item as CacheItem<unknown>);
 
-    // AsyncStorage (персистентно)
+    // AsyncStorage (персистентно, обфусцировано)
     try {
-      await AsyncStorage.setItem(key, JSON.stringify(item));
+      await AsyncStorage.setItem(key, obfuscate(JSON.stringify(item)));
     } catch (error) {
       console.error("Cache set error:", error);
     }
@@ -108,7 +126,7 @@ class CacheService {
     try {
       const stored = await AsyncStorage.getItem(key);
       if (stored) {
-        const item: CacheItem<T> = JSON.parse(stored);
+        const item: CacheItem<T> = JSON.parse(deobfuscate(stored));
         if (this.isValid(item)) {
           // Восстанавливаем в память
           this.memoryCache.set(key, item as CacheItem<unknown>);
@@ -228,3 +246,4 @@ class CacheService {
 
 export const cacheService = CacheService.getInstance();
 export type { CachedChat, CachedMessage, CachedProfile };
+
